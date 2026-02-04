@@ -3,11 +3,11 @@ import torch.optim as optim
 import numpy as np
 import pandas as pd
 # 导入两个图类（按需选择）
-from graph.graph import Graph
-from graph.ellipticGraph import EllipticGraph  # 导入新建的EllipticGraph类
-from nn.topology_encoder import TopologyEncoder
-from nn.contrastive_layer import SemiSupervisedContrastiveLayer
-from nn.temporal_layer import TemporalSupervisedLayer
+from .GraphPkg.graph import Graph
+from .GraphPkg.ellipticGraph import EllipticGraph  # 导入新建的EllipticGraph类
+from .nn.topology_encoder import TopologyEncoder
+from .nn.contrastive_layer import SemiSupervisedContrastiveLayer
+from .nn.temporal_layer import TemporalSupervisedLayer
 
 # 全局配置（保持不变，如需灵活调整也可改为参数传入）
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -172,21 +172,3 @@ def main(dataset_name, graph_type):
     community_df.to_csv(community_csv_name, index=False)
     print(f"重叠社区结果已保存到 {community_csv_name}")
 
-# ===================== 两种灵活调用方式（按需选择） =====================
-if __name__ == "__main__":
-    # 方式1：直接调用（手动修改参数，简单直观）
-    # 示例1：处理 AscendEXHacker（老Graph类）
-    # main(dataset_name="AscendEXHacker", graph_type="normal")
-    
-    # 示例2：处理 Elliptic（新EllipticGraph类）
-    # main(dataset_name="Elliptic", graph_type="elliptic")
-
-    # 方式2：命令行传参（更灵活，无需修改代码，推荐批量运行时使用）
-    import argparse
-    parser = argparse.ArgumentParser(description="三层嵌入器训练+重叠社区发现（适配多数据集）")
-    parser.add_argument("--dataset", type=str, required=True, help="数据集名称（如 AscendEXHacker、Elliptic）")
-    parser.add_argument("--graph_type", type=str, required=True, choices=["normal", "elliptic"], help="图类类型（normal=老Graph，elliptic=新EllipticGraph）")
-    args = parser.parse_args()
-
-    # 从命令行接收参数并调用main
-    main(dataset_name=args.dataset, graph_type=args.graph_type)

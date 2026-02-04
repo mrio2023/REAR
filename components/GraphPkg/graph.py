@@ -298,9 +298,3 @@ class Graph:  # 类名建议大写开头，符合Python命名规范
         node_trade_freq = node_trade_freq / (np.max(node_trade_freq) + 1e-8)
 
         return ego_nodes, snapshot_adjs, node_trade_freq, node_count, snapshot_num
-
-def test(name):
-    g=Graph(name)
-    g.init_graph()
-    
-test("PlusTokenPonzi")
