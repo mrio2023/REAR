@@ -2,12 +2,14 @@ import torch
 import torch.optim as optim
 import numpy as np
 import pandas as pd
-from graph import Graph
+# 导入两个图类（按需选择）
+from graph.graph import Graph
+from graph.ellipticGraph import EllipticGraph  # 导入新建的EllipticGraph类
 from nn.topology_encoder import TopologyEncoder
 from nn.contrastive_layer import SemiSupervisedContrastiveLayer
 from nn.temporal_layer import TemporalSupervisedLayer
 
-# 全局配置
+# 全局配置（保持不变，如需灵活调整也可改为参数传入）
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 EPOCHS = 100
 LEARNING_RATE = 1e-3
@@ -16,17 +18,33 @@ EMBED_DIM = 64
 DECAY_RATE = 0.9  # 时序衰减率
 TEMPERATURE = 0.07  # 对比损失温度系数
 
-def main():
-    # ===================== 1. 初始化Graph实例 =====================
-    print("===== 初始化K-ego子图 =====")
-    graph = Graph("AscendEXHacker")
-    graph.init_graph(k=3)  # 构建3阶ego子图
+def main(dataset_name, graph_type):
+    """
+    三层嵌入器+重叠社区发现主流程（参数外部传入，不写死）
+    :param dataset_name: 数据集名称（如 "AscendEXHacker"、"Elliptic"）
+    :param graph_type: 图类类型（"normal" 对应老Graph类，"elliptic" 对应新EllipticGraph类）
+    """
+    # 移除无效的空CSV读取（原代码无意义）
+    # df_hacker=pd.read_csv("")
+
+    # ===================== 1. 初始化图实例（根据传入参数选择图类） =====================
+    print(f"===== 初始化K-ego子图（数据集：{dataset_name}，图类：{graph_type}） =====")
+    if graph_type == "normal":
+        graph = Graph(dataset_name)
+        graph.init_graph(k=3)  # 构建3阶ego子图（老图类逻辑）
+    elif graph_type == "elliptic":
+        graph = EllipticGraph(dataset_name)
+        graph.init_graph(k=3)  # 构建3阶ego子图（新图类逻辑）
+    else:
+        raise ValueError("graph_type仅支持 'normal' 或 'elliptic'，请检查传入参数")
+
+    # 验证子图有效性
     if graph.node_count == 0:
-        print("Error: 子图节点数为0，退出程序")
+        print(f"Error: 数据集 {dataset_name} 子图节点数为0，退出程序")
         return
 
-    # ===================== 2. 初始化三层嵌入器 =====================
-    # 第一层：拓扑编码器
+    # ===================== 2. 初始化三层嵌入器（保持原逻辑，兼容两个图类） =====================
+    # 第一层：拓扑编码器（节点特征维度=度数+交易频率）
     feat_dim = 2  # 节点特征维度（度数+交易频率）
     topology_encoder = TopologyEncoder(
         in_dim=feat_dim,
@@ -40,7 +58,7 @@ def main():
         temperature=TEMPERATURE
     ).to(DEVICE)
 
-    # 第三层：时序监督层
+    # 第三层：时序监督层（兼容快照数获取）
     snapshot_num = TemporalSupervisedLayer.get_snapshot_num(graph)
     temporal_layer = TemporalSupervisedLayer(
         embed_dim=EMBED_DIM,
@@ -48,13 +66,15 @@ def main():
         decay_rate=DECAY_RATE
     ).to(DEVICE)
 
-    # ===================== 3. 准备训练数据 =====================
-    # 拓扑编码器输入（Graph转PyG格式）
+    # ===================== 3. 准备训练数据（适配传入的数据集名称） =====================
+    # 拓扑编码器输入（Graph转PyG格式，需保证graph2pyg_input兼容两个图类）
     x, edge_index = TopologyEncoder.graph2pyg_input(graph)
-    # 节点标签（需替换为实际标签文件路径）
-    node_labels = contrast_layer.get_node_labels(graph, node_label_path="df/AscendEXHacker/AscendEXHacker_node_classes.csv")
 
-    # ===================== 4. 优化器配置 =====================
+    # 节点标签（根据传入的dataset_name拼接路径，不写死）
+    label_file_path = f"df/{dataset_name}/{dataset_name}_node_classes.csv"
+    node_labels = contrast_layer.get_node_labels(graph, node_label_path=label_file_path)
+
+    # ===================== 4. 优化器配置（保持原逻辑不变） =====================
     optimizer = optim.AdamW(
         list(topology_encoder.parameters()) + 
         list(contrast_layer.parameters()) + 
@@ -63,7 +83,7 @@ def main():
         weight_decay=1e-4
     )
 
-    # ===================== 5. 训练流程 =====================
+    # ===================== 5. 训练流程（保持原逻辑，无修改） =====================
     print("===== 开始训练三层嵌入器 =====")
     topology_encoder.train()
     contrast_layer.train()
@@ -84,15 +104,17 @@ def main():
         # 总损失
         total_loss = contrast_loss + temporal_loss
 
-        # 反向传播
+        # 反向传播与优化
         total_loss.backward()
         optimizer.step()
 
-        # 打印训练日志
+        # 打印训练日志（每10轮打印一次）
         if (epoch + 1) % 10 == 0:
-            print(f"Epoch [{epoch+1}/{EPOCHS}] | Total Loss: {total_loss.item():.4f} | Contrast Loss: {contrast_loss.item():.4f} | Temporal Loss: {temporal_loss.item():.4f}")
+            log_info = f"Epoch [{epoch+1}/{EPOCHS}] | Total Loss: {total_loss.item():.4f}"
+            log_info += f" | Contrast Loss: {contrast_loss.item():.4f} | Temporal Loss: {temporal_loss.item():.4f}"
+            print(log_info)
 
-    # ===================== 6. 推理：生成所有节点嵌入 =====================
+    # ===================== 6. 推理：生成所有节点嵌入（保持原逻辑） =====================
     print("\n===== 训练完成，生成节点嵌入 =====")
     topology_encoder.eval()
     contrast_layer.eval()
@@ -104,15 +126,16 @@ def main():
         contrast_embed, _ = contrast_layer(topology_embed, node_labels)
         final_embed, _ = temporal_layer(contrast_embed, graph)
 
-    # 保存嵌入结果
+    # 保存嵌入结果（文件名包含数据集名称，避免覆盖）
+    embed_csv_name = f"{dataset_name}_node_embeddings.csv"
     embed_df = pd.DataFrame({
         "node": graph.ego_nodes,
         "embed": final_embed.cpu().numpy().tolist()
     })
-    embed_df.to_csv("node_embeddings.csv", index=False)
-    print("节点嵌入已保存到 node_embeddings.csv")
+    embed_df.to_csv(embed_csv_name, index=False)
+    print(f"节点嵌入已保存到 {embed_csv_name}")
 
-    # ===================== 7. 重叠社区发现（层次聚类） =====================
+    # ===================== 7. 重叠社区发现（层次聚类，文件名适配数据集） =====================
     from scipy.cluster.hierarchy import linkage, fcluster
     from sklearn.metrics.pairwise import cosine_similarity
 
@@ -126,7 +149,6 @@ def main():
     for node_idx, node in enumerate(graph.ego_nodes):
         node_embed = embed_matrix[node_idx].reshape(1, -1)
         # 计算与所有社区中心的相似度
-        community_sims = []
         for thresh in thresholds:
             # 按阈值切割聚类
             clusters = fcluster(Z, t=thresh, criterion='distance')
@@ -141,13 +163,30 @@ def main():
                         overlap_communities[node] = set()
                     overlap_communities[node].add(f"cluster_{cluster_id}_thresh_{thresh:.2f}")
 
-    # 保存重叠社区结果
+    # 保存重叠社区结果（文件名包含数据集名称，避免覆盖）
+    community_csv_name = f"{dataset_name}_overlap_communities.csv"
     community_df = pd.DataFrame({
         "node": list(overlap_communities.keys()),
         "communities": [list(v) for v in overlap_communities.values()]
     })
-    community_df.to_csv("overlap_communities.csv", index=False)
-    print("重叠社区结果已保存到 overlap_communities.csv")
+    community_df.to_csv(community_csv_name, index=False)
+    print(f"重叠社区结果已保存到 {community_csv_name}")
 
+# ===================== 两种灵活调用方式（按需选择） =====================
 if __name__ == "__main__":
-    main()
+    # 方式1：直接调用（手动修改参数，简单直观）
+    # 示例1：处理 AscendEXHacker（老Graph类）
+    # main(dataset_name="AscendEXHacker", graph_type="normal")
+    
+    # 示例2：处理 Elliptic（新EllipticGraph类）
+    # main(dataset_name="Elliptic", graph_type="elliptic")
+
+    # 方式2：命令行传参（更灵活，无需修改代码，推荐批量运行时使用）
+    import argparse
+    parser = argparse.ArgumentParser(description="三层嵌入器训练+重叠社区发现（适配多数据集）")
+    parser.add_argument("--dataset", type=str, required=True, help="数据集名称（如 AscendEXHacker、Elliptic）")
+    parser.add_argument("--graph_type", type=str, required=True, choices=["normal", "elliptic"], help="图类类型（normal=老Graph，elliptic=新EllipticGraph）")
+    args = parser.parse_args()
+
+    # 从命令行接收参数并调用main
+    main(dataset_name=args.dataset, graph_type=args.graph_type)

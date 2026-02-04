@@ -38,21 +38,19 @@ class Graph:  # 类名建议大写开头，符合Python命名规范
         df_dir = os.path.join("df", self.df_name)  # 数据集文件夹路径（df/AscendEXHascker）
         node_path = os.path.join(df_dir, f"{self.df_name}_node_classes.csv")
         snapshot_path = os.path.join(df_dir, f"{self.df_name}_features.csv")  # 你的核心快照文件
-        
+        edge_path=os.path.join(df_dir, f"{self.df_name}_edgelist.csv") 
+
+
+
         # 打印路径验证（方便排查）
         print(f"节点文件路径：{node_path}")
         print(f"快照文件路径：{snapshot_path}")
 
-        # ========== 步骤2：读取种子节点（从seed.txt，路径修正） ==========
-        try:
-            with open("seed.txt", "r", encoding="utf-8") as f:
-                seed_content = f.read()
-                seed_str_list = seed_content.split()
-                self.seeds = [seed_str for seed_str in seed_str_list]
-            print(f"成功读取种子节点：{self.seeds[:5]}...（共{len(self.seeds)}个）")
-        except FileNotFoundError:
-            raise FileNotFoundError("seed.txt不存在于项目根目录，请将其放在根目录下")
-     
+        # ========== 步骤2：读取种子节点（从seed.csv，路径修正） ==========
+        df_seed=pd.read_csv(os.path.join(df_dir,f"{self.df_name}_seed.csv"))
+        print(df_seed)
+        for n in df_seed["address"]:
+            self.seeds.append(n)
 
         # ========== 步骤3：加载节点和快照CSV ==========
         try:
@@ -301,3 +299,8 @@ class Graph:  # 类名建议大写开头，符合Python命名规范
 
         return ego_nodes, snapshot_adjs, node_trade_freq, node_count, snapshot_num
 
+def test(name):
+    g=Graph(name)
+    g.init_graph()
+    
+test("PlusTokenPonzi")
