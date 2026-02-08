@@ -2,28 +2,12 @@ import torch
 import torch.optim as optim
 import numpy as np
 import pandas as pd
-import random
 # 导入两个图类（按需选择）
 from .GraphPkg.graph import Graph
 from .GraphPkg.ellipticGraph import EllipticGraph  # 导入新建的EllipticGraph类
 from .nn.topology_encoder import TopologyEncoder
 from .nn.contrastive_layer import SemiSupervisedContrastiveLayer
 from .nn.temporal_layer import TemporalSupervisedLayer
-
-# ===================== 固定随机种子（确保实验可重复） =====================
-def set_seed(seed=42):
-    """固定所有随机种子"""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)  # 多GPU场景
-    torch.backends.cudnn.deterministic = True  # 禁用非确定性算法
-    torch.backends.cudnn.benchmark = False  # 禁用自动优化（可能影响速度，按需开启）
-
-# 初始化种子
-set_seed(seed=42)
 
 # 全局配置（保持不变，如需灵活调整也可改为参数传入）
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -33,15 +17,16 @@ HIDDEN_DIM = 128
 EMBED_DIM = 64
 DECAY_RATE = 0.9  # 时序衰减率
 TEMPERATURE = 0.07  # 对比损失温度系数
-COMMUNITY_SIZE = 50  # 目标社区大小（可调整）
-SIMILARITY_THRESHOLD = 0.7  # 贪心搜索相似度阈值
 
 def main(dataset_name, graph_type):
     """
-    三层嵌入器+贪心单社区发现主流程（仅保留核心贪心搜索逻辑）
+    三层嵌入器+重叠社区发现主流程（参数外部传入，不写死）
     :param dataset_name: 数据集名称（如 "AscendEXHacker"、"Elliptic"）
     :param graph_type: 图类类型（"normal" 对应老Graph类，"elliptic" 对应新EllipticGraph类）
     """
+    # 移除无效的空CSV读取（原代码无意义）
+    # df_hacker=pd.read_csv("")
+
     # ===================== 1. 初始化图实例（根据传入参数选择图类） =====================
     print(f"===== 初始化K-ego子图（数据集：{dataset_name}，图类：{graph_type}） =====")
     if graph_type == "normal":
@@ -150,58 +135,40 @@ def main(dataset_name, graph_type):
     embed_df.to_csv(embed_csv_name, index=False)
     print(f"节点嵌入已保存到 {embed_csv_name}")
 
-    # ===================== 7. 贪心单社区发现（核心修改：仅保留贪心搜索单社区） =====================
-    print("\n===== 开始贪心单社区搜索 =====")
-    # 提取嵌入矩阵和节点列表
+    # ===================== 7. 重叠社区发现（层次聚类，文件名适配数据集） =====================
+    from scipy.cluster.hierarchy import linkage, fcluster
+    from sklearn.metrics.pairwise import cosine_similarity
+
+    # 提取嵌入矩阵
     embed_matrix = np.array(embed_df['embed'].tolist())
-    nodes = embed_df['node'].tolist()
-    node_to_idx = {node: idx for idx, node in enumerate(nodes)}
+    # 层次聚类
+    Z = linkage(embed_matrix, method='ward')
+    # 多阈值切割，生成重叠社区
+    overlap_communities = {}
+    thresholds = np.linspace(0.1, 1.0, 10)  # 不同切割阈值
+    for node_idx, node in enumerate(graph.ego_nodes):
+        node_embed = embed_matrix[node_idx].reshape(1, -1)
+        # 计算与所有社区中心的相似度
+        for thresh in thresholds:
+            # 按阈值切割聚类
+            clusters = fcluster(Z, t=thresh, criterion='distance')
+            # 计算每个聚类的中心
+            for cluster_id in np.unique(clusters):
+                cluster_embeds = embed_matrix[clusters == cluster_id]
+                cluster_center = cluster_embeds.mean(axis=0).reshape(1, -1)
+                # 余弦相似度
+                sim = cosine_similarity(node_embed, cluster_center)[0][0]
+                if sim > 0.5:  # 相似度阈值
+                    if node not in overlap_communities:
+                        overlap_communities[node] = set()
+                    overlap_communities[node].add(f"cluster_{cluster_id}_thresh_{thresh:.2f}")
 
-    # 步骤1：选择初始种子节点（嵌入向量的中心点）
-    center_embed = embed_matrix.mean(axis=0).reshape(1, -1)
-    node_similarities = [np.dot(embed_matrix[idx], center_embed.T)[0][0] for idx in range(len(nodes))]
-    seed_node_idx = np.argmax(node_similarities)
-    seed_node = nodes[seed_node_idx]
-
-    # 步骤2：贪心扩展社区（优先选择与当前社区中心最相似的节点）
-    community = {seed_node}
-    community_embed = embed_matrix[seed_node_idx].reshape(1, -1)
-
-    while len(community) < COMMUNITY_SIZE:
-        # 计算所有未加入节点与当前社区中心的相似度
-        unselected_nodes = [node for node in nodes if node not in community]
-        if not unselected_nodes:
-            break  # 无节点可选时终止
-        
-        unselected_idxs = [node_to_idx[node] for node in unselected_nodes]
-        unselected_embeds = embed_matrix[unselected_idxs]
-        
-        # 计算余弦相似度
-        community_center = community_embed.mean(axis=0).reshape(1, -1)
-        similarities = np.dot(unselected_embeds, community_center.T).flatten() / (
-            np.linalg.norm(unselected_embeds, axis=1) * np.linalg.norm(community_center)
-        )
-
-        # 选择相似度最高且满足阈值的节点
-        max_sim_idx = np.argmax(similarities)
-        max_sim = similarities[max_sim_idx]
-        
-        if max_sim < SIMILARITY_THRESHOLD:
-            break  # 相似度不足时终止
-        
-        selected_node = unselected_nodes[max_sim_idx]
-        selected_embed = unselected_embeds[max_sim_idx].reshape(1, -1)
-        
-        # 加入社区并更新社区嵌入
-        community.add(selected_node)
-        community_embed = np.vstack([community_embed, selected_embed])
-
-    # 步骤3：保存贪心单社区结果
-    community_csv_name = f"{dataset_name}_greedy_single_community.csv"
+    # 保存重叠社区结果（文件名包含数据集名称，避免覆盖）
+    community_csv_name = f"{dataset_name}_overlap_communities.csv"
     community_df = pd.DataFrame({
-        "node": list(community),
-        "community_id": [1] * len(community)  # 单社区统一标记为1
+        "node": list(overlap_communities.keys()),
+        "communities": [list(v) for v in overlap_communities.values()]
     })
     community_df.to_csv(community_csv_name, index=False)
-    print(f"贪心单社区结果已保存到 {community_csv_name}")
-    print(f"社区大小：{len(community)}，包含节点：{list(community)[:10]}...")  # 打印前10个节点
+    print(f"重叠社区结果已保存到 {community_csv_name}")
+

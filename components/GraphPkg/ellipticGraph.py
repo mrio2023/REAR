@@ -358,15 +358,15 @@ class EllipticGraph:  # 独立类，与原Graph隔离，专门适配Elliptic
 
         return ego_nodes, snapshot_adjs, node_trade_freq, node_count, snapshot_num
 
-# ========== EllipticGraph 测试函数（独立调用，不影响老代码） ==========
-def test_elliptic(name="Elliptic"):
-    try:
-        g = EllipticGraph(name)
-        g.init_graph(k=3)
-        print(f"\n=== EllipticGraph 测试成功 ===")
-    except Exception as e:
-        print(f"\n=== EllipticGraph 测试失败：{str(e)} ===")
+# # ========== EllipticGraph 测试函数（独立调用，不影响老代码） ==========
+# def test_elliptic(name="Elliptic"):
+#     try:
+#         g = EllipticGraph(name)
+#         g.init_graph(k=3)
+#         print(f"\n=== EllipticGraph 测试成功 ===")
+#     except Exception as e:
+#         print(f"\n=== EllipticGraph 测试失败：{str(e)} ===")
 
 
-if __name__ == "__main__":
-    test_elliptic("elliptic_txs")
+# if __name__ == "__main__":
+#     test_elliptic("elliptic_txs")
