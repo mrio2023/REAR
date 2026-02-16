@@ -40,9 +40,4 @@ class Agent(nn.Module):
                 logits = torch.cat([node_logits + stopping_logits[0], stopping_logits[1:]], dim=0)  # [*+1]
                 batch.append(logits)           # 存储当前样本各个节点log_softmax，社区的value 添加到 batch 列表中。
         batch_logits = batch
-        # print(batch_logits)
-        # for logits in batch_logits:
-        #     print(f"type: {type(logits)}")
-        # print(batch)
-        # batch_logits = torch.stack(batch)
         return batch_logits
