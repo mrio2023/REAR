@@ -5,6 +5,9 @@ import os
 import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 import scipy.sparse as sp
+from collections import Counter
+import matplotlib.pyplot as plt
+from datetime import datetime
 
 
 class Graph:
@@ -12,10 +15,12 @@ class Graph:
         self.df_nodes = dfnode
         self.df_feature = dffeature
         self.df_hacker = dfhacker
+        
         self.adjmap = self.calAdjMap(self.df_feature)  # from → to（出边）
         self.adjtomap = self.calAdjToMap(self.df_feature)  # to → from（入边）
         self.snapshot = self.calSnapshot(self.df_feature)
         self.deMap = self.calDegreeMap()
+        
         self.allNameTags = sorted(self.df_hacker["name_tag"].dropna().unique())
         self.tag2idx = {tag: i for i, tag in enumerate(self.allNameTags)}
         self.n_nodes = len(self.df_nodes)
@@ -23,21 +28,26 @@ class Graph:
         self.parentGraph: Graph = None
         self.MaxTrajectoryLen = 16  # 最大路径长度
         self.community_seeds = self._cache_community_seeds()
-
-    # ========== 修复bug + 优化邻居获取逻辑 ==========
+    
+    def get_1hop_subgraph(self, node: str):
+        """获取节点的一阶子图（节点自身 + 所有直接邻居）"""
+        neighbors = self.getSingleNodeNeighbor(node)
+        subgraph_nodes = set([node] + neighbors)
+        return subgraph_nodes
+    
     def getNodesNeigh(self, nodes: list):
         """获取多个节点的所有邻居（出边+入边，去重）"""
-        res = set()  # 用集合去重
+        res = set()
         for n in nodes:
-            res.update(self.getSingleNodeNeighbor(n))  # 修复：set不能用+=，用update
+            res.update(self.getSingleNodeNeighbor(n))
         return list(res)
 
     def getSingleNodeNeighbor(self, node: str):
         """获取单个节点的所有邻居（出边+入边）"""
-        fromdata = self.adjmap.get(node, [])  # 修复：用get避免KeyError
-        todata = self.adjtomap.get(node, [])   # 修复：用get避免KeyError
+        fromdata = self.adjmap.get(node, [])
+        todata = self.adjtomap.get(node, [])
         neigh = [d["to"] for d in fromdata] + [d["from"] for d in todata]
-        return list(set(neigh))  # 去重，避免重复邻居
+        return list(set(neigh))
 
     def _cache_community_seeds(self):
         community_seeds = {}
@@ -48,88 +58,74 @@ class Graph:
             community_seeds[tag] = seeds
         return community_seeds
 
-    def sampleTrajectory(self, node: str, min_community_ratio: float = 0.6):
+    def sampleTrajectory(self, node: str, min_community_ratio: float = 0.6, sample_ratio: float = 0.6):
         """
-        核心改动：
-        1. 候选节点 = 所有社区节点的邻居（出边+入边）
-        2. 保留“先扩16步→找最优子路径”逻辑
-        3. 过滤已访问节点，避免重复
+        在一阶子图上采样轨迹
+        
+        Args:
+            node: 起始节点
+            min_community_ratio: 最小社区纯度阈值，低于此值可能停止
+            sample_ratio: 无同社区节点时继续采样的概率
+        
+        Returns:
+            采样轨迹
         """
-        # 1. 基础校验：获取节点社区及种子集合
-        node_com_row = self.df_hacker[self.df_hacker["address"] == node]
-        if node_com_row.empty or pd.isna(node_com_row["name_tag"].iloc[0]):
-            return [node, "stp"]
+        tra = [node]
         
-        node_com = node_com_row["name_tag"].iloc[0]
-        seed_nodes = self.community_seeds.get(node_com, set())
-        if not seed_nodes:
-            return [node, "stp"]
-
-        # ========== 核心改动1：获取所有社区节点的邻居（候选池） ==========
-        # 候选节点 = 社区所有节点的出边+入边邻居
-        com_nodes_list = list(seed_nodes)
-        com_all_neighbors = self.getNodesNeigh(com_nodes_list)
-        # 合并社区种子节点，扩大候选池（包含社区内节点+邻居）
-        all_candidates = list(seed_nodes) + com_all_neighbors
-        # 去重 + 过滤空值
-        all_candidates = list(set([n for n in all_candidates if n is not None and n != ""]))
-        if not all_candidates:  # 无候选节点，直接终止
-            return [node, "stp"]
-
-        # 2. 扩展到最大路径长度（16步，从全候选池采样）
-        full_trajectory = [node]
-        cur_node = node
-        visited = {node}  # 过滤已访问节点，避免重复
-        has_break_early = False
+        # 获取节点的name_tag
+        node_hacker_row = self.df_hacker[self.df_hacker["address"] == node]
+        if node_hacker_row.empty or pd.isna(node_hacker_row["name_tag"].iloc[0]):
+            return tra
         
-        for _ in range(self.MaxTrajectoryLen - 1):
-            # ========== 核心改动2：从全候选池选节点（过滤已访问） ==========
-            available_candidates = [n for n in all_candidates if n not in visited]
-            if not available_candidates:  # 无未访问候选，终止
-                has_break_early = True
+        name_tag = node_hacker_row["name_tag"].iloc[0]
+        sameCom = 1
+        
+        # 获取一阶子图节点集合
+        one_hop_subgraph = self.get_1hop_subgraph(node)
+        
+        for step in range(self.MaxTrajectoryLen - 1):
+            # 获取当前路径所有节点的邻居
+            all_neighbors = set()
+            for n in tra:
+                all_neighbors.update(self.getSingleNodeNeighbor(n))
+            
+            # 候选节点 = (所有邻居 - 已访问节点) ∩ 一阶子图
+            candidate = list(all_neighbors - set(tra))
+            
+            if len(candidate) <= 0:
                 break
             
-            # 拆分候选：同社区种子节点 → 其他邻居节点
-            same_com = [n for n in available_candidates if n in seed_nodes]
-            other = [n for n in available_candidates if n not in seed_nodes]
-
-            # 节点选择逻辑：优先选同社区 → 其次其他候选
-            if same_com:
-                next_node = random.choice(same_com)
-            elif other:
-                next_node = random.choice(other)
+            # 检查社区纯度
+            current_ratio = sameCom / len(tra)
+            
+            # 随机决定是否停止（基于纯度和随机性）
+            stop_prob = max(0, 1 - current_ratio)  # 纯度越低，停止概率越高
+            if random.random() < stop_prob and len(tra) > 1:
+                break
+            
+            # 筛选候选中的同社区节点
+            community_nodes = self.community_seeds.get(name_tag, set())
+            same_community_candidates = [n for n in candidate if n in community_nodes]
+            
+            # 选择节点
+            if same_community_candidates:
+                # 优先选择同社区节点（80%概率选同社区，20%概率探索）
+                if random.random() < 0.8 or len(same_community_candidates) == len(candidate):
+                    selected_node = random.choice(same_community_candidates)
+                    tra.append(selected_node)
+                    sameCom += 1
+                else:
+                    selected_node = random.choice(candidate)
+                    tra.append(selected_node)
             else:
-                has_break_early = True
-                break
-            
-            full_trajectory.append(next_node)
-            visited.add(next_node)  # 标记已访问
-            cur_node = next_node
-
-        # 3. 遍历所有子路径，计算社区比率，找到最优子路径（逻辑不变）
-        valid_full = [n for n in full_trajectory if n != "stp"]
-        if len(valid_full) <= 1:
-            return [node, "stp"]
+                # 无同社区节点，按概率决定是否继续
+                if random.random() < sample_ratio:
+                    selected_node = random.choice(candidate)
+                    tra.append(selected_node)
+                else:
+                    break
         
-        best_ratio = 0.0
-        best_subtraj = [node]
-        
-        # 遍历所有可能的子路径长度（从2到完整轨迹长度）
-        for end_idx in range(2, len(valid_full) + 1):
-            subtraj = valid_full[:end_idx]
-            com_count = sum(1 for n in subtraj if n in seed_nodes)
-            ratio = com_count / len(subtraj)
-            if ratio > best_ratio or (ratio == best_ratio and len(subtraj) > len(best_subtraj)):
-                best_ratio = ratio
-                best_subtraj = subtraj.copy()
-
-        # 4. 判断最优比率是否达标，返回结果
-        if best_ratio >= min_community_ratio:
-            if len(best_subtraj) == self.MaxTrajectoryLen:
-                best_subtraj.append("stp")
-            return best_subtraj
-        else:
-            return [node, "stp"]
+        return tra
 
     def initScaler(self):
         t_scaler = MinMaxScaler(feature_range=(0, 10))
@@ -213,7 +209,6 @@ class Graph:
 
         if target_dim is None:
             target_dim = 64
-            print(f"使用默认维度: {target_dim}")
 
         result = []
         none_count = 0
@@ -230,9 +225,6 @@ class Graph:
             else:
                 result.append(e[:target_dim])
 
-        if none_count > 0:
-            print(f"修复了 {none_count} 个None值")
-
         return result
 
     def calDegreeMap(self):
@@ -247,7 +239,7 @@ class Graph:
                 if m not in deMap:
                     deMap[m] = 0
                 deMap[m] += 1
-        # 补充入边度数（可选，根据需求）
+        # 补充入边度数
         for n, datas in self.adjtomap.items():
             if n not in deMap:
                 deMap[n] = 0
