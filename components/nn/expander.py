@@ -66,76 +66,89 @@ class Expander:
         return round(p, 4), round(r, 4), round(f, 4), round(j, 4)
 
     def sample_actions(self, logits):
-        """采样动作，返回动作和对数概率"""
+        """采样动作，返回动作和对数概率（适配Agent修复后的logits）"""
         actions = []
         log_probs = []
 
         for batch_idx, batch_logits in enumerate(logits):
             if batch_logits is None or batch_logits.numel() == 0 or batch_logits.size(0) == 0:
                 actions.append("Stp")
-                log_probs.append(None)
+                log_probs.append(torch.tensor(0.0, device=self.device, requires_grad=True))
                 continue
 
-            if batch_logits.dim() == 2:
-                if batch_logits.size(0) == 1:
-                    batch_logits = batch_logits.squeeze(0)
-                elif batch_logits.size(0) > 1:
-                    batch_logits = batch_logits[0]
+            if batch_logits.dim() > 1:
+                batch_logits = batch_logits.squeeze()
 
             if batch_logits.numel() == 0:
                 actions.append("Stp")
-                log_probs.append(None)
+                log_probs.append(torch.tensor(0.0, device=self.device, requires_grad=True))
                 continue
 
+            # 在采样环节做log_softmax，保留完整梯度链路
             log_probs_dist = F.log_softmax(batch_logits, dim=-1)
-            probs = torch.exp(log_probs_dist).detach().cpu().numpy()
-            probs = probs / (probs.sum() + 1e-8)
 
-            if len(probs) == 1:
-                action = 0
-            else:
-                try:
-                    action = np.random.choice(len(probs), p=probs)
-                except ValueError:
-                    action = np.argmax(probs)
+            try:
+                # 使用原始logits构造分布（推荐）
+                dist = torch.distributions.Categorical(logits=batch_logits)
+                action = dist.sample()
+                log_prob = dist.log_prob(action)
+            except Exception as e:
+                # 降级方案：使用log_softmax结果
+                action = torch.argmax(log_probs_dist)
+                log_prob = log_probs_dist[action]
 
-            log_prob = log_probs_dist[action]
             if log_prob.dim() > 0:
                 log_prob = log_prob.squeeze()
 
-            actions.append(int(action))
-            log_probs.append(log_prob.item())
+            # 强制保留梯度
+            log_prob.requires_grad_(True)
 
+            actions.append(int(action.item()))
+            log_probs.append(log_prob)
+            
         return actions, log_probs
 
-    def prepare_inputs(self, tra_vector,seed_vector,tra_nodes):
-        neigh=[]
-        t_tra_vector=[]
-        t_seed_vector=[]
-        indptr=[]
-        choice=[]#候选人
+    def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
+        # tra_vector 和 seed_vector 现在都是 tensor
+        neigh = []
+        t_tra_vector = []
+        t_seed_vector = []
+        indptr = []
+        choice = []
         offset = 0
-        for i,tra in enumerate(tra_nodes):
-            neigh=self.graph.getNodesNeigh(tra)
-            choice.append(neigh)
-            neigh_embed=self.graph.nodesEmbed(neigh)
-         
-            temp=neigh_embed+[tra_vector[i]]
-            t_tra_vector+=temp
-            temp=neigh_embed+[seed_vector[i]]
-            t_seed_vector+=temp
-            indptr.append((offset, offset +1+len(neigh), offset + len(neigh)))  
-            offset += len(neigh)+1
         
-      
-        t_seed_vector=np.array(t_seed_vector)
-        t_tra_vector=np.array(t_tra_vector)
-        vals_seed = torch.from_numpy(t_seed_vector).to(self.device)
-        vals_node = torch.from_numpy(t_tra_vector).to(self.device)
-        indptr = np.array(indptr)
-        return vals_seed, vals_node, indptr, choice
+        for i, tra in enumerate(tra_nodes):
+            neigh = self.graph.getNodesNeigh(tra)
+            choice.append(neigh)
+            neigh_embed = self.graph.nodesEmbed(neigh)
+            
+            # 确保 neigh_embed 是 tensor（统一处理numpy/tensor）
+            if not isinstance(neigh_embed, torch.Tensor):
+                neigh_embed = np.array(neigh_embed)
+                neigh_embed = torch.tensor(neigh_embed, dtype=torch.float32, device=self.device)
+            else:
+                neigh_embed = neigh_embed.to(self.device)
+            
+            # 训练阶段强制开启梯度
+            if self.model.training:
+                neigh_embed.requires_grad_(True)
 
-     
+            # 直接拼接 tensor，不用 numpy
+            t_tra_vector.append(neigh_embed)
+            t_tra_vector.append(tra_vector[i].unsqueeze(0))
+            
+            t_seed_vector.append(neigh_embed)
+            t_seed_vector.append(seed_vector[i].unsqueeze(0))
+            
+            indptr.append((offset, offset + 1 + len(neigh), offset + len(neigh)))
+            offset += len(neigh) + 1
+        
+        # 直接 cat tensor
+        t_tra_vector = torch.cat(t_tra_vector, dim=0)
+        t_seed_vector = torch.cat(t_seed_vector, dim=0)
+        indptr = np.array(indptr)
+        
+        return t_seed_vector, t_tra_vector, indptr, choice
 
     def add_node(self, new_node, tra_nodes, index):
         """添加节点到轨迹"""
@@ -148,6 +161,14 @@ class Expander:
 
         tra_nodes[index].append(new_node)
         embed = self.graph.singleNodeEmbed(new_node)
+        
+        # 将numpy数组转为tensor
+        if not isinstance(embed, torch.Tensor):
+            embed = torch.tensor(embed, dtype=torch.float32, device=self.device)
+        
+        # 训练阶段强制开启梯度
+        if self.model.training:
+            embed.requires_grad_(True)
         return embed
 
     def all_done(self):
@@ -167,34 +188,34 @@ class Expander:
                 rewards.append([reward_val])
 
         return rewards
-    def vecpool(self,v1, v2, k):
-        # print(v1)
-        # print(v2)
-        if not isinstance(v1, np.ndarray):
-            v1 = np.array(v1)
-        if not isinstance(v2, np.ndarray):
-            v2 = np.array(v2)
-        
-
-        if len(v1) != len(v2):
-            print(f"警告：向量维度不一致 v1:{len(v1)} v2:{len(v2)}")
-            # 可以截断或补零
-            min_len = min(len(v1), len(v2))
-            v1 = v1[:min_len]
-            v2 = v2[:min_len]
-        
-        return (v1*(k-1) + v2) / k
+    
+    def vecpool(self, v1, v2, k):
+        # 直接返回新 tensor，不使用 in-place 操作（避免梯度污染）
+        return (v1 * (k-1) + v2) / k
 
     def sample_bs_trajectories(self, seeds):
         seed_vector = self.graph.nodesEmbed(seeds)
+        
+        # 统一seed_vector为tensor+强制梯度
+        if not isinstance(seed_vector, torch.Tensor):
+            seed_vector = np.array(seed_vector)
+            seed_vector = torch.tensor(seed_vector, dtype=torch.float32, device=self.device)
+        else:
+            seed_vector = seed_vector.to(self.device)
+        
+        # 训练阶段强制开启梯度
+        if self.model.training:
+            seed_vector.requires_grad_(True)
+        
+        tra_vector = seed_vector.clone()  # 克隆保留梯度链路
+
         tra_nodes = [[s] for s in seeds]
-        tra_logps = [[] for _ in range(len(seeds))]  # 改为空列表，不要用[1]
-        tra_vector = copy.deepcopy(seed_vector)
+        tra_logps = [[] for _ in range(len(seeds))]
+         
         step = 0
-        self.done = [False] * len(seeds)  # 初始化 done 状态
+        self.done = [False] * len(seeds)
         
         while step < self.maxLen and not self.all_done():
-            # 只处理未完成的轨迹
             active_indices = [i for i, d in enumerate(self.done) if not d]
             
             if not active_indices:
@@ -204,44 +225,42 @@ class Expander:
             active_tra_vector = [tra_vector[i] for i in active_indices]
             active_seed_vector = [seed_vector[i] for i in active_indices]
             
-            # 准备输入
             *model_inputs, batch_candidates = self.prepare_inputs(
                 tra_nodes=active_tra_nodes,
                 tra_vector=active_tra_vector,
                 seed_vector=active_seed_vector
             )
-            
+
             # 模型前向传播
             batch_logits = self.model(*model_inputs)
             actions, logps = self.sample_actions(batch_logits)
             
-            # 更新每个活跃轨迹
             for j, orig_idx in enumerate(active_indices):
                 ac = actions[j]
                 logp = logps[j]
                 
-                # 处理不同类型的动作
-                if isinstance(ac, str) and ac == "Stp":  # 停止动作
+                if isinstance(ac, str) and ac == "Stp":
                     self.add_node("Stp", tra_nodes, orig_idx)
-                    tra_logps[orig_idx].append(logp if logp is not None else 0)
-                    
-                else:  # 整数动作，选择节点
+                    if logp is not None:
+                        tra_logps[orig_idx].append(logp)
+                else:
                     cand_list = batch_candidates[j]
-                    if ac >= len(cand_list):  # 动作超出候选范围，也视为停止
+                    if ac >= len(cand_list):
                         self.add_node("Stp", tra_nodes, orig_idx)
                         tra_logps[orig_idx].append(logp)
-                    else:  # 正常选择节点
+                    else:
                         selected_node = cand_list[ac]
                         newvec = self.add_node(selected_node, tra_nodes, orig_idx)
                         
-                        if newvec is not None:  # 成功添加节点
-                            # 更新轨迹向量（平均池化）
+                        if newvec is not None:
                             current_len = len(tra_nodes[orig_idx])
-                            tra_vector[orig_idx] = self.vecpool(
-                                tra_vector[orig_idx],
-                                newvec,
-                                current_len
-                            )
+                            # 仅pooling时禁用梯度，不影响主链路
+                            with torch.no_grad():
+                                tra_vector[orig_idx] = self.vecpool(
+                                    tra_vector[orig_idx],
+                                    newvec,
+                                    current_len
+                                )
                             tra_logps[orig_idx].append(logp)
             
             step += 1
@@ -252,13 +271,15 @@ class Expander:
         '''
         通过奖励更新参数
         @param seeds: 一个batch的节点
-        @param true_coms: 节点对应的真是社区
+        @param true_coms: 节点对应的真实社区
         '''
         bs = len(seeds)
         self.model.train()
-        self.optimizer.zero_grad()
-        selected_nodes, logps = self.sample_bs_trajectories(seeds)
+        # 高效梯度清零，避免梯度残留
+        self.optimizer.zero_grad(set_to_none=True)
 
+        # 采样轨迹（训练模式下，输入已开启梯度追踪）
+        selected_nodes, logps = self.sample_bs_trajectories(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
 
         # 计算奖励
@@ -274,76 +295,69 @@ class Expander:
                     temp_com.append(node)
                     _, _, after_cost, _ = self.eval_scores(temp_com, true_com)
                     r.append(after_cost - pre_cost)
-            reward = [np.sum(r[i] * (gamma ** np.array(range(i, len(r))))) for i in range(len(r))]
+            # 处理空奖励列表，避免维度错误
+            if len(r) == 0:
+                reward = [0.0]
+            else:
+                reward = [np.sum(r[i] * (gamma ** np.array(range(i, len(r))))) for i in range(len(r))]
             rewards_list.append(reward)
-        
+
         # 填充rewards和logps到相同长度
         max_len = max(len(r) for r in rewards_list) if rewards_list else 0
         max_logp_len = max(len(lp) for lp in logps) if logps else 0
         max_len = max(max_len, max_logp_len)
         
+        # 奖励填充：保持原有逻辑
         rewards_padded = np.zeros((bs, max_len))
-        logps_padded = np.zeros((bs, max_len))
-        
         for i, r in enumerate(rewards_list):
             rewards_padded[i, :len(r)] = r
-        for i, lp in enumerate(logps):
-            logps_padded[i, :len(lp)] = lp
-        
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
-        logps = torch.tensor(logps_padded, device=self.device, dtype=torch.float32, requires_grad=True)
         
+        # Logps填充：避免原地操作，先创建列表再拼接
+        logps_list = []
+        for i, lp_list in enumerate(logps):
+            # 对每个样本的logps进行填充
+            padded_lp = []
+            for j in range(max_len):
+                if j < len(lp_list) and lp_list[j] is not None:
+                    padded_lp.append(lp_list[j])
+                else:
+                    # 填充0，且保持梯度特性
+                    padded_lp.append(torch.tensor(0.0, device=self.device, requires_grad=True))
+            # 拼接成单个tensor
+            logps_tensor = torch.stack(padded_lp)
+            logps_list.append(logps_tensor)
+        # 拼接所有样本的logps
+        logps = torch.stack(logps_list)
+
+        # 生成mask
         mask = torch.arange(rewards.size(1), device=self.device,
                             dtype=torch.int64).expand(bs, -1) < (lengths - 1).unsqueeze(1)
         mask = mask.float()
 
-       
-        policy_loss = -(rewards * logps * mask).sum()
-        
+        # 计算损失
+        loss_core = -(rewards * logps * mask).sum()
+        policy_loss = loss_core * 1.0  # 损失缩放系数
         loss = policy_loss
-        # print("rewards:", rewards)
-        # print("logps:", logps)
-        # print("mask:",mask)
-        # print("loss",loss)
+
+        # 反向传播
         loss.backward()
 
-        ###test    
-        total_norm = 0
-        for p in self.model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm ** 0.5
-        print(f"Gradient norm: {total_norm:.6f}")
-        
-        # 检查参数变化
-        old_params = [p.data.clone() for p in self.model.parameters()]
-        
+        # 优化器更新
         self.optimizer.step()
-        
-        # 检查参数是否更新
-        for i, (old, p) in enumerate(zip(old_params, self.model.parameters())):
-            diff = (old - p.data).abs().sum().item()
-            print(f"Layer {i} change: {diff:.6f}")
 
-   
+        return policy_loss.item()
 
-
-        
-
-     
-
-from dataProcess import DataProcess
 from torch import optim
-import random
-import numpy as np
 
-def test(epochs=30):
+def test(epochs=3):
     d = DataProcess(dfname="PlusTokenPonzi")
     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
     
     model = Agent(input_size=88, hidden_size=128)
-    e = Expander(graph=g, optimizer=optim.Adam(model.parameters(), lr=0.001), model=model)
+    # 优化器配置
+    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+    e = Expander(graph=g, optimizer=optimizer, model=model)
     
     history = {'loss': [], 'f1': []}
     
@@ -351,18 +365,28 @@ def test(epochs=30):
         # 训练
         seeds = random.sample(g.df_hacker["address"].values.tolist(), k=3)
         truecom = [g.sampleTrajectory(s) for s in seeds]
-        e.trainReward(seeds=seeds, true_coms=truecom)
+        loss = e.trainReward(seeds=seeds, true_coms=truecom)
+        history['loss'].append(loss)
         
         # 评估
         e.model.eval()
-        tra_nodes, _ = e.sample_bs_trajectories(seeds)
-        f1s = [e.eval_scores(tra, truecom[i])[2] for i, tra in enumerate(tra_nodes)]
-        avg_f1 = np.mean(f1s)
+        with torch.no_grad():
+            # 使用独立的评估种子，避免复用训练数据导致的梯度污染
+            eval_seeds = random.sample(g.df_hacker["address"].values.tolist(), k=3)
+            eval_truecom = [g.sampleTrajectory(s) for s in eval_seeds]
+            tra_nodes, _ = e.sample_bs_trajectories(eval_seeds)
+            f1s = [e.eval_scores(tra, eval_truecom[i])[2] for i, tra in enumerate(tra_nodes)]
+            avg_f1 = np.mean(f1s)
         
         history['f1'].append(avg_f1)
-        print(f"Epoch {epoch+1}: F1={avg_f1:.4f}")
+        print(f"Epoch {epoch+1} 总结:")
+        print(f"  Loss: {loss:.4f}")
+        print(f"  F1: {avg_f1:.4f}")
     
-    print(f"\nBest F1: {max(history['f1']):.4f}")
+    print("\n训练完成")
+    print(f"最佳F1: {max(history['f1']):.4f}")
+    print(f"最终Loss: {history['loss'][-1]:.4f}")
+    
     return history
 
 if __name__ == "__main__":

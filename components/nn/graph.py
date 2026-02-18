@@ -208,7 +208,7 @@ class Graph:
                 break
 
         if target_dim is None:
-            target_dim = 64
+            target_dim = 88
 
         result = []
         none_count = 0
