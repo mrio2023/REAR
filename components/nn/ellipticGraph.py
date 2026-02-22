@@ -10,40 +10,33 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 
 
-class Graph:
-    def __init__(self, dfnode, dffeature, dfhacker):
+class ellipticGraph:
+    def __init__(self, dfnode, dffeature, dfhacker,dfedge):
         self.df_nodes = dfnode
         self.df_feature = dffeature
+        self.df_edge=dfedge
         self.df_hacker = dfhacker
         
-        self.adjmap = self.calAdjMap(self.df_feature)  # from → to（出边）
-        self.adjtomap = self.calAdjToMap(self.df_feature)  # to → from（入边）
-        self.snapshot = self.calSnapshot(self.df_feature)
+        self.adjmap = self.calAdjMap(self.df_edge)  # from → to（出边）
+        self.adjtomap = self.calAdjToMap(self.df_edge)  # to → from（入边）
         self.deMap = self.calDegreeMap()
-        
+     
+
         self.allNameTags = sorted(self.df_hacker["name_tag"].dropna().unique())
         self.tag2idx = {tag: i for i, tag in enumerate(self.allNameTags)}
         self.n_nodes = len(self.df_nodes)
-        self.t_scaler = self.initScaler()
-        self.parentGraph: Graph = None
+        self.parentGraph: ellipticGraph = None
         self.MaxTrajectoryLen = 16  # 最大路径长度
         self.community_seeds = self._cache_community_seeds()
+
         self.embedsize=self.initEmbedSize()
-        
     def initEmbedSize(self):
-        
-        for idx, row in self.df_nodes.iterrows():
+        # 取第一个节点计算嵌入维度，增加空值判断避免报错
+        first_node = self.df_nodes["address"].iloc[0]
+        first_embed = self.singleNodeEmbed(first_node)
+        return len(first_embed)
      
-            address = row.get("address")
-            if address and pd.notna(address) and str(address).strip():
-         
-                embed = self.singleNodeEmbed(address)
-                if embed is not None:
-                    return len(embed)
-        return 82
-
-
-
+    
     def get_1hop_subgraph(self, node: str):
         """获取节点的一阶子图（节点自身 + 所有直接邻居）"""
         neighbors = self.getSingleNodeNeighbor(node)
@@ -144,74 +137,13 @@ class Graph:
         
         return tra, is_weak 
 
-    def initScaler(self):
-        t_scaler = MinMaxScaler(feature_range=(0, 10))
-        all_trade = self.df_feature["Amount"].values.reshape(-1, 1)
-        t_scaler.fit(all_trade)
-        return t_scaler
-
-    def addressToBinaryEmbedding(self, address: str, embed_dim=64):
-        if address.startswith("0x"):
-            hex_str = address[2:].lower()
-        else:
-            hex_str = address.lower()
-        if len(hex_str) != 40:
-            raise ValueError(f"无效的以太坊地址长度: {address}")
-        addr_bytes = bytes.fromhex(hex_str)
-        bits = []
-        for byte in addr_bytes:
-            bits.extend([(byte >> i) & 1 for i in range(8)])
-        if embed_dim > len(bits):
-            bits = bits * (embed_dim // len(bits) + 1)
-        return np.array(bits[:embed_dim], dtype=np.float32)
 
     def singleNodeEmbed(self, node):
-        tag_dim = len(self.allNameTags)
-        if node not in self.deMap:
-            return None
-        node_hacker_row = self.df_hacker[self.df_hacker["address"] == node]
-        tag_embed = np.zeros(tag_dim, dtype=np.float32)
-        if not node_hacker_row.empty:
-            node_tag = node_hacker_row["name_tag"].iloc[0]
-            if not pd.isna(node_tag) and node_tag in self.tag2idx:
-                tag_embed[self.tag2idx[node_tag]] = 1.0
-        self_degree = self.deMap[node]
-        neighdata = self.adjmap.get(node, [])
-        trades = []
-        neighbor_degrees = []
-        for data in neighdata:
-            neighbor_node = data["to"]
-            if neighbor_node in self.deMap:
-                neighbor_degrees.append(self.deMap[neighbor_node])
-            trades.append(data["amt"])
-        t_max = t_min = t_mean = t_std = 0.0
-        if trades:
-            t_max_original = np.max(trades)
-            t_min_original = np.min(trades)
-            t_mean_original = np.mean(trades)
-            t_std = np.std(trades)
-            t_max = self.t_scaler.transform([[t_max_original]])[0][0]
-            t_min = self.t_scaler.transform([[t_min_original]])[0][0]
-            t_mean = self.t_scaler.transform([[t_mean_original]])[0][0]
-        n_deg_max = n_deg_min = n_deg_mean = n_deg_std = 0.0
-        if neighbor_degrees:
-            n_deg_max = np.max(neighbor_degrees)
-            n_deg_min = np.min(neighbor_degrees)
-            n_deg_mean = np.mean(neighbor_degrees)
-            n_deg_std = np.std(neighbor_degrees)
-        hash_embed = self.addressToBinaryEmbedding(node, embed_dim=64)
+        node_row = self.df_feature[self.df_feature.iloc[:, 0] == node]
+        if node_row.empty:
+            return [0*(len(self.df_feature[0])-2)]
+        embed_vector = node_row.iloc[0, 2:].values  # iloc[0]取第一行（node唯一），2:取第三列及以后
 
-        embed_vector = np.concatenate(
-            [
-                hash_embed,
-                tag_embed,
-                np.array([self_degree], dtype=np.float32),
-                np.array(
-                    [n_deg_max, n_deg_min, n_deg_mean, n_deg_std], dtype=np.float32
-                ),
-                np.array([t_max, t_min, t_mean, t_std], dtype=np.float32),
-            ]
-        )
         return embed_vector
 
     def nodesEmbed(self, nodes: list):
@@ -268,47 +200,39 @@ class Graph:
                 deMap[m] += 1
         return deMap
 
-    def calAdjMap(self, df_features: pd.DataFrame):
+    def calAdjMap(self, df_edge: pd.DataFrame):
         adj_map = dict()
-        for _, row in df_features.iterrows():
+        for _, row in df_edge.iterrows():
             u = row["from"]
             v = row["to"]
-            amt = row["amt"] if "amt" in row else row["Amount"]
-            tsp = row["timeStamp"]
-            edge_data = {"to": v, "amt": amt, "tsp": tsp}
+            edge_data = {"to": v}
             if u in adj_map:
                 adj_map[u].append(edge_data)
             else:
                 adj_map[u] = [edge_data]
         return adj_map
 
-    def calAdjToMap(self, df_features: pd.DataFrame):
+    def calAdjToMap(self, df_edge: pd.DataFrame):
         adj_map = dict()
-        for _, row in df_features.iterrows():
+        for _, row in df_edge.iterrows():
             u = row["to"]
             v = row["from"]
-            amt = row["amt"] if "amt" in row else row["Amount"]
-            tsp = row["timeStamp"]
-            edge_data = {"from": v, "amt": amt, "tsp": tsp}
+            edge_data = {"from": v}
             if u in adj_map:
                 adj_map[u].append(edge_data)
             else:
                 adj_map[u] = [edge_data]
         return adj_map
 
-    def calSnapshot(self, df_features: pd.DataFrame):
-        snap_shots = []
-        df_time_grouped = df_features.sort_values("timeStamp").groupby("timeStamp")
-        for timestamp, df_t in df_time_grouped:
-            snap_shot = self.calAdjMap(df_t)
-            snap_shots.append({"timestamp": timestamp, "adjmap": snap_shot})
-        return snap_shots
 
-
-# from dataProcess import DataProcess
+# import pandas as pd
 # def test(epochs=3):
-#     d = DataProcess(dfname="PlusTokenPonzi")
-#     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
+#     edge=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_edgelist.csv")
+#     node=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_node_classes.csv")
+#     feature=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_features.csv")
+#     hacker=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_hacker.csv")
+
+#     g = ellipticGraph(dffeature=feature, dfhacker=hacker, dfnode=node,dfedge=edge)
 #     seeds = random.sample(g.df_hacker["address"].values.tolist(), k=10)
 
 #     truecom = []
@@ -317,7 +241,10 @@ class Graph:
 #         c,w=g.sampleTrajectory(s,min_community_ratio=0,sample_ratio=1)
 #         truecom.append(c)
 #         isweak.append(w)
-
+    
+#     print("testembed",g.singleNodeEmbed(seeds[0]))
+#     print("testnodesembed",g.nodesEmbed(seeds))
 #     print("truecoms:",truecom)
 #     print("isweak:",isweak)
+#     print("向量完整：","嵌入长度", len(g.singleNodeEmbed(seeds[0])), "表格向量长度", (len(g.df_feature.iloc[0])-2))
 # test()

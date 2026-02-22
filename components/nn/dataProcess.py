@@ -1,7 +1,6 @@
 import os
 import pandas as pd
 import random
-import gc
 
 class DataProcess:
     def __init__(self, dfname):
@@ -9,8 +8,8 @@ class DataProcess:
       
         df_nodes, df_feature, df_hacker = self.readData()
       
-        # 修改：不再过滤小社区，直接使用所有社区
-        self.df_hacker_filtered, self.train_hacker, self.test_hacker = self.getTrainAndTestCom(df_hacker)
+        # 修改：不再过滤小社区，直接使用所有社区（注：实际过滤逻辑移到getTrainAndTestCom里了）
+        self.df_hacker_filtered, self.train_hacker, self.test_hacker = self.getTrainAndTestCom(df_hacker, min_community_size=10)  # 可自定义小社区阈值
         
         self.train_nodes, self.test_nodes, self.train_feature, self.test_feature = self.splitData(df_nodes, df_feature)
         
@@ -48,11 +47,14 @@ class DataProcess:
 
         return df_nodes, df_feature, df_hacker
 
-    def getTrainAndTestCom(self, df_hacker, min_size=3):
+    def getTrainAndTestCom(self, df_hacker, min_community_size:int=2): 
         """
-        修改点：不再删除小社区，只处理空标签
+        修改点：
+        1. 过滤空标签社区
+        2. 过滤小社区（节点数 < min_community_size），直接移除不纳入计算
+        3. 仅对剩余的大社区划分训练/测试集
         """
-        # 只删除标签为空的记录（name_tag为NaN的）
+        # 第一步：删除标签为空的记录（name_tag为NaN的）
         indices_to_drop = []
         for tag, group_df in df_hacker.groupby("name_tag"):
             if pd.isna(tag):  # 只删除空标签
@@ -63,37 +65,47 @@ class DataProcess:
         df_hacker_filtered = df_hacker.drop(indices_to_drop).copy() if indices_to_drop else df_hacker.copy()
         
         if df_hacker_filtered.empty:
-            raise ValueError("过滤后无有效社区数据")
+            raise ValueError("过滤空标签后无有效社区数据")
         
-        # 随机划分训练/测试社区（75%/25%）
-        tagList = df_hacker_filtered["name_tag"].unique().tolist()
-        train_size = int(0.75 * len(tagList))
+        # 第二步：过滤小社区（核心改动）
+        small_community_tags = []  # 存储小社区的标签
+        large_community_tags = []  # 存储大社区的标签
+        for tag in df_hacker_filtered["name_tag"].unique():
+            community_size = len(df_hacker_filtered[df_hacker_filtered["name_tag"] == tag])
+            if community_size < min_community_size:
+                small_community_tags.append((tag, community_size))
+            else:
+                large_community_tags.append(tag)
         
-        trainCom = random.sample(tagList, train_size)
-        testCom = list(set(tagList) - set(trainCom))
+        # 移除小社区的所有记录
+        df_hacker_filtered = df_hacker_filtered[df_hacker_filtered["name_tag"].isin(large_community_tags)].copy()
         
-        # 生成train_hacker/test_hacker
+        if df_hacker_filtered.empty:
+            raise ValueError(f"过滤小社区（<{min_community_size}节点）后无有效社区数据")
+        
+        # 第三步：仅对大社区划分训练/测试集（75%/25%）
+        train_size = int(0.75 * len(large_community_tags))
+        trainCom = random.sample(large_community_tags, train_size)
+        testCom = list(set(large_community_tags) - set(trainCom))
+        
+        # 生成train_hacker/test_hacker（仅包含大社区）
         train_hacker = df_hacker_filtered[df_hacker_filtered["name_tag"].isin(trainCom)].copy()
         test_hacker = df_hacker_filtered[df_hacker_filtered["name_tag"].isin(testCom)].copy()
         
-        # 打印统计信息
-        print(f"\n社区统计:")
-        print(f"  总社区数: {len(tagList)}")
-        print(f"  训练社区: {len(trainCom)} (75%)")
-        print(f"  测试社区: {len(testCom)} (25%)")
+        # 打印统计信息（更清晰的过滤报告）
+        print(f"\n=== 社区过滤与划分统计 ===")
+        print(f"原始社区总数（非空标签）: {len(df_hacker['name_tag'].dropna().unique())}")
+        print(f"小社区数（<{min_community_size}节点）: {len(small_community_tags)} (已过滤)")
+        print(f"大社区数（≥{min_community_size}节点）: {len(large_community_tags)} (用于划分)")
+        print(f"  - 训练社区: {len(trainCom)} (75%)")
+        print(f"  - 测试社区: {len(testCom)} (25%)")
         
-        # 打印小社区信息（方便观察）
-        small_coms = []
-        for tag in tagList:
-            size = len(df_hacker_filtered[df_hacker_filtered["name_tag"] == tag])
-            if size < 10:
-                small_coms.append((tag, size))
-        
-        if small_coms:
-            print(f"\n小社区统计 (<10节点):")
-            for tag, size in sorted(small_coms, key=lambda x: x[1])[:10]:  # 只显示前10个
+        # 打印小社区详情（可选）
+        if small_community_tags:
+            print(f"\n被过滤的小社区列表（前10个）:")
+            for tag, size in sorted(small_community_tags, key=lambda x: x[1])[:10]:
                 print(f"  {tag}: {size}节点")
-            if len(small_coms) > 10:
-                print(f"  ... 还有{len(small_coms)-10}个小社区")
+            if len(small_community_tags) > 10:
+                print(f"  ... 还有{len(small_community_tags)-10}个小社区未显示")
         
         return df_hacker_filtered, train_hacker, test_hacker

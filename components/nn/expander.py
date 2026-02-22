@@ -1,22 +1,19 @@
-import copy
-import time
+
 from typing import Union, Optional, List, Set
 import pandas as pd
 import numpy as np
 import torch
 import torch.nn.functional as F
-from dataProcess import DataProcess
-import random
-from tool import Tool
-from graph import Graph
-from gnn import GNN
-from Agent import Agent
+
+
+
+from codes.components.nn.Agent import Agent
 
 
 class Expander:
     def __init__(
         self,
-        graph: Graph,
+        graph,
         model: Agent,
         optimizer,
         device: Optional[torch.device] = None,
@@ -28,7 +25,6 @@ class Expander:
         self.graph = graph
         self.model = model
         self.optimizer = optimizer
-        self.conv = GNN(graph, k, alpha)
         self.gamma = gamma
         self.maxLen = maxLen
         self.done = []
@@ -184,7 +180,9 @@ class Expander:
                 p, r, f1, j = self.eval_scores(tra, true_comms[i])
                 rewards.append([f1])
             else:
-                reward_val = len(tra) / self.maxLen
+                reward_val=-0.1;
+                if not true_comms:
+                    reward_val = len(tra) / self.maxLen
                 rewards.append([reward_val])
 
         return rewards
@@ -246,6 +244,7 @@ class Expander:
                 else:
                     cand_list = batch_candidates[j]
                     if ac >= len(cand_list):
+                        # print(f"Stp触发：样本{orig_idx} 索引{ac}≥候选数{len(cand_list)}")
                         self.add_node("Stp", tra_nodes, orig_idx)
                         tra_logps[orig_idx].append(logp)
                     else:
@@ -267,12 +266,14 @@ class Expander:
         
         return tra_nodes, tra_logps
 
-    def trainReward(self, seeds: List[int], true_coms):
+    def trainReward(self, seeds: List[int], true_coms,isweak):
         '''
         通过奖励更新参数
         @param seeds: 一个batch的节点
         @param true_coms: 节点对应的真实社区
         '''
+        
+
         bs = len(seeds)
         self.model.train()
         # 高效梯度清零，避免梯度残留
@@ -284,18 +285,30 @@ class Expander:
 
         # 计算奖励
         rewards_list = []
+
+       
         for index in range(len(selected_nodes)):
+
             com = selected_nodes[index]
             true_com = true_coms[index]
+            isweakflags=isweak[index]
+            # print(isweakflags)
+
             r, gamma = [], 0.99
             temp_com = [com[0]]
-            for node in com[1:]:
-                if node != 'EOS':
+            for step_idx, node in enumerate(com[1:]):
+                if node != 'Stp':
                     _, _, pre_cost, _ = self.eval_scores(temp_com, true_com)
                     temp_com.append(node)
                     _, _, after_cost, _ = self.eval_scores(temp_com, true_com)
-                    r.append(after_cost - pre_cost)
-            # 处理空奖励列表，避免维度错误
+                    step_reward = after_cost - pre_cost
+                    if step_idx < len(isweakflags) and isweakflags[step_idx]:
+                        step_reward *= 0.5
+
+                        # print("weak_index:",step_idx)
+
+
+                    r.append(step_reward)
             if len(r) == 0:
                 reward = [0.0]
             else:
@@ -313,6 +326,9 @@ class Expander:
             rewards_padded[i, :len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
         
+        # print("rewards",rewards)
+        # print("logps",logps)
+
         # Logps填充：避免原地操作，先创建列表再拼接
         logps_list = []
         for i, lp_list in enumerate(logps):
@@ -329,11 +345,15 @@ class Expander:
             logps_list.append(logps_tensor)
         # 拼接所有样本的logps
         logps = torch.stack(logps_list)
-
+        
         # 生成mask
         mask = torch.arange(rewards.size(1), device=self.device,
                             dtype=torch.int64).expand(bs, -1) < (lengths - 1).unsqueeze(1)
         mask = mask.float()
+
+        # print("rewards:",reward)
+        # print("logs:",logps)
+        # print("masks:",mask)
 
         # 计算损失
         loss_core = -(rewards * logps * mask).sum()
@@ -342,52 +362,46 @@ class Expander:
 
         # 反向传播
         loss.backward()
-
-        # 优化器更新
+        # # #看梯度
+        # print({name: param.grad.mean().item() if param.grad is not None else None for name, param in self.model.named_parameters()})
+        # # 优化器更新
         self.optimizer.step()
 
         return policy_loss.item()
 
-from torch import optim
+# from torch import optim
 
-def test(epochs=3):
-    d = DataProcess(dfname="PlusTokenPonzi")
-    g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
+# def test(epochs=3):
+#     d = DataProcess(dfname="PlusTokenPonzi")
+#     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
     
-    model = Agent(input_size=88, hidden_size=128)
-    # 优化器配置
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    e = Expander(graph=g, optimizer=optimizer, model=model)
+#     model = Agent(input_size=82, hidden_size=128)
+#     # 优化器配置
+#     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
+#     e = Expander(graph=g, optimizer=optimizer, model=model)
     
-    history = {'loss': [], 'f1': []}
+#     history = {'loss': [], 'f1': []}
     
-    for epoch in range(epochs):
-        # 训练
-        seeds = random.sample(g.df_hacker["address"].values.tolist(), k=3)
-        truecom = [g.sampleTrajectory(s) for s in seeds]
-        loss = e.trainReward(seeds=seeds, true_coms=truecom)
-        history['loss'].append(loss)
-        
-        # 评估
-        e.model.eval()
-        with torch.no_grad():
-            # 使用独立的评估种子，避免复用训练数据导致的梯度污染
-            eval_seeds = random.sample(g.df_hacker["address"].values.tolist(), k=3)
-            eval_truecom = [g.sampleTrajectory(s) for s in eval_seeds]
-            tra_nodes, _ = e.sample_bs_trajectories(eval_seeds)
-            f1s = [e.eval_scores(tra, eval_truecom[i])[2] for i, tra in enumerate(tra_nodes)]
-            avg_f1 = np.mean(f1s)
-        
-        history['f1'].append(avg_f1)
-        print(f"Epoch {epoch+1} 总结:")
-        print(f"  Loss: {loss:.4f}")
-        print(f"  F1: {avg_f1:.4f}")
-    
-    print("\n训练完成")
-    print(f"最佳F1: {max(history['f1']):.4f}")
-    print(f"最终Loss: {history['loss'][-1]:.4f}")
-    
-    return history
+#     for epoch in range(epochs):
+#         # 训练
+#         seeds = random.sample(g.df_hacker["address"].values.tolist(), k=3)
+#         isweak=[]
+#         truecom =[]
+#         for s in seeds:
+#             c,w=g.sampleTrajectory(s)
+#             truecom.append(c)
+#             isweak.append(w)
 
-if __name__ == "__main__":
-    test()
+#         print(truecom,isweak)
+#         print(truecom)
+#         loss = e.trainReward(seeds=seeds, true_coms=truecom,isweak=isweak)
+#         history['loss'].append(loss)
+        
+      
+    
+
+    
+#     return history
+
+# if __name__ == "__main__":
+#     test()

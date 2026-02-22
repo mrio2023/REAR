@@ -4,3 +4,7 @@ Agent是强化学习的模型，嵌入RL里面，将图转换成RL所需要的�
 graph是我改的，适配金融数据
 layers是Agent的工具函数，静态，辅助Agent工作
 gnn是一个静态函数，不是强化学习部分，用来聚合图的数据
+
+常见bug
+RuntimeError: mat1 and mat2 shapes cannot be multiplied (13x82 and 88x128):
+    inputsize不对，调一下就行

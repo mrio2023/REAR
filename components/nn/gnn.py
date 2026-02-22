@@ -1,14 +1,11 @@
 import numpy as np
 from scipy import sparse as sp
-import random
 
-from graph import Graph
-from dataProcess import DataProcess
-from tool import Tool
+
 
 
 class GNN:
-    def __init__(self, graph:Graph, k: int = 2, alpha: float = 0.85):
+    def __init__(self, graph, k: int = 2, alpha: float = 0.85):
         self.graph = graph
         self.k = k
         self.alpha = alpha
