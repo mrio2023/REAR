@@ -225,26 +225,3 @@ class ellipticGraph:
         return adj_map
 
 
-# import pandas as pd
-# def test(epochs=3):
-#     edge=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_edgelist.csv")
-#     node=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_node_classes.csv")
-#     feature=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_features.csv")
-#     hacker=pd.read_csv("codes\df\elliptic_txs\elliptic_txs_hacker.csv")
-
-#     g = ellipticGraph(dffeature=feature, dfhacker=hacker, dfnode=node,dfedge=edge)
-#     seeds = random.sample(g.df_hacker["address"].values.tolist(), k=10)
-
-#     truecom = []
-#     isweak=[]
-#     for s in seeds :
-#         c,w=g.sampleTrajectory(s,min_community_ratio=0,sample_ratio=1)
-#         truecom.append(c)
-#         isweak.append(w)
-    
-#     print("testembed",g.singleNodeEmbed(seeds[0]))
-#     print("testnodesembed",g.nodesEmbed(seeds))
-#     print("truecoms:",truecom)
-#     print("isweak:",isweak)
-#     print("向量完整：","嵌入长度", len(g.singleNodeEmbed(seeds[0])), "表格向量长度", (len(g.df_feature.iloc[0])-2))
-# test()

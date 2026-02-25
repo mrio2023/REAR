@@ -150,31 +150,50 @@ class Graph:
         t_scaler.fit(all_trade)
         return t_scaler
 
-    def addressToBinaryEmbedding(self, address: str, embed_dim=64):
-        if address.startswith("0x"):
-            hex_str = address[2:].lower()
+    def addressToBinaryEmbedding(self, address, embed_dim=64):
+        import hashlib
+        
+        # 将输入转换为字符串并进行哈希处理
+        if isinstance(address, str):
+            if address.startswith("0x"):
+                hex_str = address[2:].lower()
+            else:
+                hex_str = address.lower()
         else:
-            hex_str = address.lower()
+            # 对于非字符串类型，直接进行哈希
+            hash_object = hashlib.sha256(str(address).encode())
+            hex_str = hash_object.hexdigest()
+        
+        # 确保有40个字符
         if len(hex_str) != 40:
-            raise ValueError(f"无效的以太坊地址长度: {address}")
-        addr_bytes = bytes.fromhex(hex_str)
+            if len(hex_str) < 40:
+                hex_str = hex_str.zfill(40)
+            else:
+                hex_str = hex_str[:40]
+        
+        # 转换为字节
+        try:
+            addr_bytes = bytes.fromhex(hex_str)
+        except ValueError:
+            # 如果转换失败，重新哈希
+            hash_object = hashlib.sha256(str(address).encode())
+            hex_str = hash_object.hexdigest()[:40]
+            addr_bytes = bytes.fromhex(hex_str)
+        
+        # 生成二进制位
         bits = []
         for byte in addr_bytes:
             bits.extend([(byte >> i) & 1 for i in range(8)])
+        
+        # 确保长度足够
         if embed_dim > len(bits):
             bits = bits * (embed_dim // len(bits) + 1)
+        
         return np.array(bits[:embed_dim], dtype=np.float32)
 
     def singleNodeEmbed(self, node):
-        tag_dim = len(self.allNameTags)
         if node not in self.deMap:
             return None
-        node_hacker_row = self.df_hacker[self.df_hacker["address"] == node]
-        tag_embed = np.zeros(tag_dim, dtype=np.float32)
-        if not node_hacker_row.empty:
-            node_tag = node_hacker_row["name_tag"].iloc[0]
-            if not pd.isna(node_tag) and node_tag in self.tag2idx:
-                tag_embed[self.tag2idx[node_tag]] = 1.0
         self_degree = self.deMap[node]
         neighdata = self.adjmap.get(node, [])
         trades = []
@@ -200,11 +219,9 @@ class Graph:
             n_deg_mean = np.mean(neighbor_degrees)
             n_deg_std = np.std(neighbor_degrees)
         hash_embed = self.addressToBinaryEmbedding(node, embed_dim=64)
-
         embed_vector = np.concatenate(
             [
                 hash_embed,
-                tag_embed,
                 np.array([self_degree], dtype=np.float32),
                 np.array(
                     [n_deg_max, n_deg_min, n_deg_mean, n_deg_std], dtype=np.float32
@@ -225,7 +242,7 @@ class Graph:
                 break
 
         if target_dim is None:
-            target_dim = 88
+            target_dim = 73
 
         result = []
         none_count = 0
@@ -307,7 +324,7 @@ class Graph:
 
 # from dataProcess import DataProcess
 # def test(epochs=3):
-#     d = DataProcess(dfname="PlusTokenPonzi")
+#     d = DataProcess(dfname="archive")
 #     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
 #     seeds = random.sample(g.df_hacker["address"].values.tolist(), k=10)
 

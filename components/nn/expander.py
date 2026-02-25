@@ -172,21 +172,47 @@ class Expander:
         return all(self.done) if self.done else False
 
     def calc_rewards(self, tra_nodes, true_comms=None):
-        """计算奖励"""
+        """计算奖励（新增：有真实标签时，超长部分单独扣-0.1惩罚，保留多维列表格式）"""
         rewards = []
+        # 可自定义：超长惩罚力度（每超1个节点扣0.1）、超长阈值（超过真实长度即罚）
+        OVER_LENGTH_PENALTY = -0.1  # 每个超长节点的惩罚值
 
         for i, tra in enumerate(tra_nodes):
             if true_comms and i < len(true_comms):
-                p, r, f1, j = self.eval_scores(tra, true_comms[i])
-                rewards.append([f1])
+                # 场景1：有有效真实标签 - F1不变，超长部分单独扣罚
+                true_comm = true_comms[i]
+                true_len = len(true_comm)
+                pred_len = len(tra)
+                
+                # 1. 计算原始F1（和原逻辑完全一致，不修改）
+                p, r, f1, j = self.eval_scores(tra, true_comm)
+                
+                # 2. 计算超长惩罚：仅当预测长度 > 真实长度时，按超出节点数扣罚
+                over_penalty = 0.0
+                if pred_len > true_len:
+                    over_len = pred_len - true_len  # 超出的节点数量
+                    over_penalty = over_len * OVER_LENGTH_PENALTY  # 总惩罚
+                    # 兜底：确保奖励不会扣成负数（可选，按需删除）
+                    over_penalty = max(over_penalty, -f1)
+                
+                # 3. 最终奖励 = 原始F1 + 超长惩罚，保留多维列表格式 [最终奖励]
+                final_reward = f1 + over_penalty
+                rewards.append([final_reward])
+            
             else:
-                reward_val=-0.1;
+                # 场景2：无有效真实标签/索引越界 - 保留原逻辑，仅优化格式
+                reward_val = -0.1
                 if not true_comms:
                     reward_val = len(tra) / self.maxLen
+                    # 可选：无标签时也给超长惩罚（比如超过maxLen时扣罚）
+                    if len(tra) > self.maxLen:
+                        over_len = len(tra) - self.maxLen
+                        reward_val += over_len * OVER_LENGTH_PENALTY
+                        reward_val = max(reward_val, 0.0)  # 最低奖励为0
+                # 保留原多维列表格式
                 rewards.append([reward_val])
 
         return rewards
-    
     def vecpool(self, v1, v2, k):
         # 直接返回新 tensor，不使用 in-place 操作（避免梯度污染）
         return (v1 * (k-1) + v2) / k
@@ -363,19 +389,21 @@ class Expander:
         # 反向传播
         loss.backward()
         # # #看梯度
-        # print({name: param.grad.mean().item() if param.grad is not None else None for name, param in self.model.named_parameters()})
-        # # 优化器更新
+        print({name: param.grad.mean().item() if param.grad is not None else None for name, param in self.model.named_parameters()})
+        # 优化器更新
         self.optimizer.step()
 
         return policy_loss.item()
 
+# from random import random
 # from torch import optim
-
+# from ellipticGraph import ellipticGraph
+# from ellipticDataProcess import ellipticDataProcess
 # def test(epochs=3):
-#     d = DataProcess(dfname="PlusTokenPonzi")
-#     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
+#     d = ellipticDataProcess(dfname="elliptic2")
+#     g = ellipticGraph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
     
-#     model = Agent(input_size=82, hidden_size=128)
+#     model = Agent(input_size=g.embedsize, hidden_size=128)
 #     # 优化器配置
 #     optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
 #     e = Expander(graph=g, optimizer=optimizer, model=model)

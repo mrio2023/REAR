@@ -9,7 +9,7 @@ class DataProcess:
         df_nodes, df_feature, df_hacker = self.readData()
       
         # 修改：不再过滤小社区，直接使用所有社区（注：实际过滤逻辑移到getTrainAndTestCom里了）
-        self.df_hacker_filtered, self.train_hacker, self.test_hacker = self.getTrainAndTestCom(df_hacker, min_community_size=10)  # 可自定义小社区阈值
+        self.df_hacker_filtered, self.train_hacker, self.test_hacker = self.getTrainAndTestCom(df_hacker, min_community_size=5)  # 可自定义小社区阈值
         
         self.train_nodes, self.test_nodes, self.train_feature, self.test_feature = self.splitData(df_nodes, df_feature)
         

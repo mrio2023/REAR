@@ -3,8 +3,8 @@ import random
 import os
 
 class ellipticDataProcess():
-    def __init__(self, dfname):
-        self.dfname = dfname
+    def __init__(self,dfname:str):
+        self.dfname =dfname
         # 读取数据（适配dfname参数的通用路径）
         df_edge, df_nodes, df_feature, df_hacker = self.readData()
       
