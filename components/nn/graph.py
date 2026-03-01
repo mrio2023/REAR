@@ -1,55 +1,33 @@
-import hashlib
 import random
 import pandas as pd
-import os
 import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-import scipy.sparse as sp
-from collections import Counter
-import matplotlib.pyplot as plt
-from datetime import datetime
 
 
 class Graph:
-    def __init__(self, dfnode, dffeature, dfhacker):
+    def __init__(self, dfnode, dffeature, dfhacker, dfedge):
         self.df_nodes = dfnode
         self.df_feature = dffeature
+        self.df_edge = dfedge
         self.df_hacker = dfhacker
-        
-        self.adjmap = self.calAdjMap(self.df_feature)  # from → to（出边）
-        self.adjtomap = self.calAdjToMap(self.df_feature)  # to → from（入边）
-        self.snapshot = self.calSnapshot(self.df_feature)
-        self.deMap = self.calDegreeMap()
-        
+
+        self.adjmap = self.calAdjMap(self.df_edge)  # from → to（出边）
+        self.adjtomap = self.calAdjToMap(self.df_edge)  # to → from（入边）
         self.allNameTags = sorted(self.df_hacker["name_tag"].dropna().unique())
         self.tag2idx = {tag: i for i, tag in enumerate(self.allNameTags)}
         self.n_nodes = len(self.df_nodes)
-        self.t_scaler = self.initScaler()
-        self.parentGraph: Graph = None
-        self.MaxTrajectoryLen = 16  # 最大路径长度
         self.community_seeds = self._cache_community_seeds()
-        self.embedsize=self.initEmbedSize()
-        
+        self.embedsize = self.initEmbedSize()
+
     def initEmbedSize(self):
-        
-        for idx, row in self.df_nodes.iterrows():
-     
-            address = row.get("address")
-            if address and pd.notna(address) and str(address).strip():
-         
-                embed = self.singleNodeEmbed(address)
-                if embed is not None:
-                    return len(embed)
-        return 82
 
-
+        return self.df_feature.shape[1] - 1
 
     def get_1hop_subgraph(self, node: str):
         """获取节点的一阶子图（节点自身 + 所有直接邻居）"""
         neighbors = self.getSingleNodeNeighbor(node)
         subgraph_nodes = set([node] + neighbors)
         return subgraph_nodes
-    
+
     def getNodesNeigh(self, nodes: list):
         """获取多个节点的所有邻居（出边+入边，去重）"""
         res = set()
@@ -65,6 +43,7 @@ class Graph:
         return list(set(neigh))
 
     def _cache_community_seeds(self):
+        """缓存每个社区的种子节点"""
         community_seeds = {}
         for tag in self.allNameTags:
             seeds = set(
@@ -73,183 +52,105 @@ class Graph:
             community_seeds[tag] = seeds
         return community_seeds
 
-    def sampleTrajectory(self, node: str, min_community_ratio: float = 0.6, sample_ratio: float = 0.6):
+    def sampleTrajectory(self, node: str, traj_length: int):
         """
-        在一阶子图上采样轨迹
-        
+        采样轨迹（仅在同社区节点内部随机游走）
+        异常场景（无社区/无有效节点/无候选邻居）直接返回当前轨迹，允许长度小于指定长度
+
         Args:
             node: 起始节点
-            min_community_ratio: 最小社区纯度阈值，低于此值可能停止
-            sample_ratio: 无同社区节点时继续采样的概率
-        
+            traj_length: 期望的轨迹长度（最大长度）
         Returns:
-            采样轨迹
+            tra: 采样后的轨迹（长度可能小于traj_length）
         """
+        # 初始化轨迹，至少包含起始节点
         tra = [node]
-        is_weak=[False]
-        #种子节点为一个社区的某一个点
-        # 获取节点的name_tag
+
+        # 1. 无社区标签：直接返回仅包含起始节点的轨迹
         node_hacker_row = self.df_hacker[self.df_hacker["address"] == node]
         if node_hacker_row.empty or pd.isna(node_hacker_row["name_tag"].iloc[0]):
-            return tra,is_weak
-        
+            return tra
+
+        # 2. 获取社区节点，无有效社区节点：直接返回当前轨迹
         name_tag = node_hacker_row["name_tag"].iloc[0]
-        sameCom = 1
-        
-     
-        for step in range(self.MaxTrajectoryLen - 1):
-            # 获取当前路径所有节点的邻居
-            all_neighbors = set()
-            for n in tra:
-                all_neighbors.update(self.getSingleNodeNeighbor(n))
-            
-        
-            candidate = list(all_neighbors - set(tra))
-            
-            if len(candidate) <= 0:
-                break
-            
-            # 检查社区纯度
-            current_ratio = sameCom / len(tra)
-            
-            # 随机决定是否停止（基于纯度和随机性）
-            stop_prob = max(0, 1 - current_ratio)  # 纯度越低，停止概率越高
-            if random.random() < stop_prob and len(tra) > 1:
-                break
-            
-            # 筛选候选中的同社区节点
-            community_nodes = self.community_seeds.get(name_tag, set())
-            same_community_candidates = [n for n in candidate if n in community_nodes]
-            
-            # 选择节点
-            if same_community_candidates:
-                # 优先选择同社区节点（80%概率选同社区，20%概率探索）
-                if random.random() < 0.8 or len(same_community_candidates) == len(candidate):
-                    selected_node = random.choice(same_community_candidates)
-                    tra.append(selected_node)
-                    sameCom += 1
-                    is_weak.append(False)
-                else:
-                    selected_node = random.choice(candidate)
-                    tra.append(selected_node)
-                    is_weak.append(True)
-            else:
-                # 无同社区节点，按概率决定是否继续
-                if random.random() < sample_ratio:
-                    selected_node = random.choice(candidate)
-                    tra.append(selected_node)
-                    is_weak.append(True)
-                else:
-                    break
-        
-        return tra, is_weak 
+        community_nodes = self.community_seeds.get(name_tag, set())
+        # 过滤出存在邻居的同社区节点（无邻居则视为无有效节点）
+        community_nodes = {n for n in community_nodes if self.getSingleNodeNeighbor(n)}
+        if not community_nodes:
+            return tra
 
-    def initScaler(self):
-        t_scaler = MinMaxScaler(feature_range=(0, 10))
-        all_trade = self.df_feature["Amount"].values.reshape(-1, 1)
-        t_scaler.fit(all_trade)
-        return t_scaler
+        # 3. 同社区内随机游走，无候选节点时直接返回
+        while len(tra) < traj_length:
+            current_node = tra[-1]
+            current_neighbors = set(self.getSingleNodeNeighbor(current_node))
+            # 仅保留同社区且未访问的候选节点
+            candidates = [
+                n for n in current_neighbors if n in community_nodes and n not in tra
+            ]
 
-    def addressToBinaryEmbedding(self, address, embed_dim=64):
-        import hashlib
-        
-        # 将输入转换为字符串并进行哈希处理
-        if isinstance(address, str):
-            if address.startswith("0x"):
-                hex_str = address[2:].lower()
-            else:
-                hex_str = address.lower()
-        else:
-            # 对于非字符串类型，直接进行哈希
-            hash_object = hashlib.sha256(str(address).encode())
-            hex_str = hash_object.hexdigest()
-        
-        # 确保有40个字符
-        if len(hex_str) != 40:
-            if len(hex_str) < 40:
-                hex_str = hex_str.zfill(40)
-            else:
-                hex_str = hex_str[:40]
-        
-        # 转换为字节
-        try:
-            addr_bytes = bytes.fromhex(hex_str)
-        except ValueError:
-            # 如果转换失败，重新哈希
-            hash_object = hashlib.sha256(str(address).encode())
-            hex_str = hash_object.hexdigest()[:40]
-            addr_bytes = bytes.fromhex(hex_str)
-        
-        # 生成二进制位
-        bits = []
-        for byte in addr_bytes:
-            bits.extend([(byte >> i) & 1 for i in range(8)])
-        
-        # 确保长度足够
-        if embed_dim > len(bits):
-            bits = bits * (embed_dim // len(bits) + 1)
-        
-        return np.array(bits[:embed_dim], dtype=np.float32)
+            # 无候选节点：终止游走，返回当前轨迹
+            if not candidates:
+                return tra
+
+            # 有候选节点：随机选择并加入轨迹
+            selected_node = random.choice(candidates)
+            tra.append(selected_node)
+
+        # 4. 达到期望长度：返回完整轨迹
+        return tra
 
     def singleNodeEmbed(self, node):
-        if node not in self.deMap:
-            return None
-        self_degree = self.deMap[node]
-        neighdata = self.adjmap.get(node, [])
-        trades = []
-        neighbor_degrees = []
-        for data in neighdata:
-            neighbor_node = data["to"]
-            if neighbor_node in self.deMap:
-                neighbor_degrees.append(self.deMap[neighbor_node])
-            trades.append(data["amt"])
-        t_max = t_min = t_mean = t_std = 0.0
-        if trades:
-            t_max_original = np.max(trades)
-            t_min_original = np.min(trades)
-            t_mean_original = np.mean(trades)
-            t_std = np.std(trades)
-            t_max = self.t_scaler.transform([[t_max_original]])[0][0]
-            t_min = self.t_scaler.transform([[t_min_original]])[0][0]
-            t_mean = self.t_scaler.transform([[t_mean_original]])[0][0]
-        n_deg_max = n_deg_min = n_deg_mean = n_deg_std = 0.0
-        if neighbor_degrees:
-            n_deg_max = np.max(neighbor_degrees)
-            n_deg_min = np.min(neighbor_degrees)
-            n_deg_mean = np.mean(neighbor_degrees)
-            n_deg_std = np.std(neighbor_degrees)
-        hash_embed = self.addressToBinaryEmbedding(node, embed_dim=64)
-        embed_vector = np.concatenate(
-            [
-                hash_embed,
-                np.array([self_degree], dtype=np.float32),
-                np.array(
-                    [n_deg_max, n_deg_min, n_deg_mean, n_deg_std], dtype=np.float32
-                ),
-                np.array([t_max, t_min, t_mean, t_std], dtype=np.float32),
-            ]
-        )
+        """获取单个节点的嵌入向量（无str转换，直接匹配，无兜底）"""
+        # 1. 基础校验
+        if self.df_feature.empty:
+            raise ValueError("特征表self.df_feature为空，无法获取节点嵌入")
+        
+        if 'address' not in self.df_feature.columns:
+            raise KeyError("特征表缺少'address'列，无法匹配节点")
+        
+        # 2. 直接用原始类型匹配（移除所有str转换）
+        # 核心：确保传入的node类型 和 df_feature['address']列类型完全一致
+        node_row = self.df_feature[self.df_feature['address'] == node]
+        
+        # 3. 节点不存在直接报错
+        if node_row.empty:
+            # 报错时打印类型信息，便于排查类型不匹配问题
+            node_type = type(node).__name__
+            addr_type = self.df_feature['address'].dtype
+            raise ValueError(
+                f"节点 {node}（类型：{node_type}）不存在于特征表中 | "
+                f"特征表address列类型：{addr_type}"
+            )
+        
+        # 4. 提取嵌入向量并校验维度
+        embed_vector = node_row.iloc[0, 1:].values.astype(np.float32)
+        expected_dim = len(self.df_feature.columns) - 1  # 排除address列
+        
+        if len(embed_vector) != expected_dim:
+            raise RuntimeError(
+                f"节点 {node} 嵌入维度异常：预期{expected_dim}维，实际{len(embed_vector)}维"
+            )
+        
         return embed_vector
 
     def nodesEmbed(self, nodes: list):
         """批量获取节点嵌入"""
         embeds = [self.singleNodeEmbed(n) for n in nodes]
 
+        # 确定目标维度
         target_dim = None
         for e in embeds:
             if e is not None:
                 target_dim = len(e)
                 break
-
         if target_dim is None:
-            target_dim = 73
+            target_dim = 88
 
+        # 统一嵌入维度
         result = []
-        none_count = 0
-        for i, e in enumerate(embeds):
+        for e in embeds:
             if e is None:
                 result.append(np.zeros(target_dim, dtype=np.float32))
-                none_count += 1
             elif len(e) == target_dim:
                 result.append(e)
             elif len(e) < target_dim:
@@ -261,80 +162,76 @@ class Graph:
 
         return result
 
-    def calDegreeMap(self):
-        deMap = dict()
-        # 统计出边度数
-        for n, datas in self.adjmap.items():
-            if n not in deMap:
-                deMap[n] = 0
-            deMap[n] += len(datas)
-            for edge_data in datas:
-                m = edge_data["to"]
-                if m not in deMap:
-                    deMap[m] = 0
-                deMap[m] += 1
-        # 补充入边度数
-        for n, datas in self.adjtomap.items():
-            if n not in deMap:
-                deMap[n] = 0
-            deMap[n] += len(datas)
-            for edge_data in datas:
-                m = edge_data["from"]
-                if m not in deMap:
-                    deMap[m] = 0
-                deMap[m] += 1
-        return deMap
-
-    def calAdjMap(self, df_features: pd.DataFrame):
+    def calAdjMap(self, df_edge: pd.DataFrame):
+        """构建出边邻接映射"""
         adj_map = dict()
-        for _, row in df_features.iterrows():
+        for _, row in df_edge.iterrows():
             u = row["from"]
             v = row["to"]
-            amt = row["amt"] if "amt" in row else row["Amount"]
-            tsp = row["timeStamp"]
-            edge_data = {"to": v, "amt": amt, "tsp": tsp}
+            edge_data = {"to": v}
             if u in adj_map:
                 adj_map[u].append(edge_data)
             else:
                 adj_map[u] = [edge_data]
         return adj_map
 
-    def calAdjToMap(self, df_features: pd.DataFrame):
+    def calAdjToMap(self, df_edge: pd.DataFrame):
+        """构建入边邻接映射"""
         adj_map = dict()
-        for _, row in df_features.iterrows():
+        for _, row in df_edge.iterrows():
             u = row["to"]
             v = row["from"]
-            amt = row["amt"] if "amt" in row else row["Amount"]
-            tsp = row["timeStamp"]
-            edge_data = {"from": v, "amt": amt, "tsp": tsp}
+            edge_data = {"from": v}
             if u in adj_map:
                 adj_map[u].append(edge_data)
             else:
                 adj_map[u] = [edge_data]
         return adj_map
 
-    def calSnapshot(self, df_features: pd.DataFrame):
-        snap_shots = []
-        df_time_grouped = df_features.sort_values("timeStamp").groupby("timeStamp")
-        for timestamp, df_t in df_time_grouped:
-            snap_shot = self.calAdjMap(df_t)
-            snap_shots.append({"timestamp": timestamp, "adjmap": snap_shot})
-        return snap_shots
 
+# from dataProcess import dataProcess
+# def test():
+#     """
+#     适配dataProcess的测试函数：
+#     1. 初始化数据处理类，获取训练数据
+#     2. 初始化Graph类，参数对应训练集的node/feature/hacker/edge
+#     3. 简单验证Graph核心功能（轨迹采样、节点嵌入）
+#     """
+#     try:
+#         # 1. 初始化数据处理类（获取elliptic数据集的训练/测试拆分）
+#         dp = dataProcess(dfname="elliptic",normal_node_ratio=1,min_community_size=5,expand_hop=3)
+#         print("✅ dataProcess初始化成功")
 
-# from dataProcess import DataProcess
-# def test(epochs=3):
-#     d = DataProcess(dfname="archive")
-#     g = Graph(dffeature=d.train_feature, dfhacker=d.train_hacker, dfnode=d.train_nodes)
-#     seeds = random.sample(g.df_hacker["address"].values.tolist(), k=10)
+#         # 2. 初始化Graph类（训练时使用train相关数据，node和hacker对应训练集）
+#         # 核心适配：Graph的dfnode传train_nodes，dfhacker传train_hacker
+#         g = Graph(
+#             dfnode=dp.train_nodes,       # 训练节点数据
+#             dffeature=dp.train_feature,  # 训练特征数据
+#             dfhacker=dp.train_hacker,    # 训练黑客（社区）数据
+#             dfedge=dp.train_edge         # 训练边数据
+#         )
+#         print("✅ Graph类初始化成功")
 
-#     truecom = []
-#     isweak=[]
-#     for s in seeds :
-#         c,w=g.sampleTrajectory(s,min_community_ratio=0,sample_ratio=1)
-#         truecom.append(c)
-#         isweak.append(w)
+#         # 3. 简单验证核心功能（不删除原有方法，仅验证可用性）
+#         if len(dp.train_hacker) > 0:
+#             # 随机选一个训练集的黑客节点做轨迹采样
+#             test_node = dp.train_hacker["address"].iloc[0]
+#             traj = g.sampleTrajectory(node=test_node, traj_length=10)
+#             print(f"✅ 轨迹采样成功，采样轨迹长度：{len(traj)}，轨迹：{traj[:5]}...")
 
-#     print("truecoms:",truecom)
-#     print("isweak:",isweak)
-# test()
+#             # 验证节点嵌入功能
+#             embed = g.singleNodeEmbed(test_node)
+#             print(f"✅ 单个节点嵌入成功，嵌入维度：{len(embed)}")
+
+#             # 验证邻居获取功能
+#             neighbors = g.getSingleNodeNeighbor(test_node)
+#             print(f"✅ 邻居获取成功，邻居数量：{len(neighbors)}")
+#         else:
+#             print("⚠️ 训练集无黑客节点，跳过功能验证")
+
+#     except Exception as e:
+#         print(f"❌ 测试失败：{e}")
+
+# # 执行测试
+# if __name__ == "__main__":
+#     test()

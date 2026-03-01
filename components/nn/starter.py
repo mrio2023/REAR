@@ -1,238 +1,242 @@
-import sys
-import os
+
+from typing import Union, Optional, List, Set
+import pandas as pd
 import numpy as np
 import torch
-import pandas as pd
+import torch.nn.functional as F
+import os  # 新增：用于控制PyTorch CUDA随机性
+
+# 记得转为相对引用
+# starter.py 开头（修改后）
+from .dataProcess import dataProcess  # 同目录
+from .graph import Graph              # 同目录
+from .Agent import Agent              # 同目录
+from .expander import Expander        # 同目录
+from .configure import Configure      # 同目录
 import random
-import matplotlib.pyplot as plt
-from torch import optim
 
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
-plt.rcParams['axes.unicode_minus'] = False
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../')))
+def set_seed(seed: int = 42):
+    """固定所有随机种子，保证实验可复现"""
+    # Python内置随机数
+    random.seed(seed)
+    # NumPy随机数
+    np.random.seed(seed)
+    # PyTorch CPU随机数
+    torch.manual_seed(seed)
+    # PyTorch GPU随机数（单卡）
+    torch.cuda.manual_seed(seed)
+    # PyTorch GPU随机数（多卡）
+    torch.cuda.manual_seed_all(seed)
+    # 禁用cuDNN的随机性（保证卷积/池化等操作可复现）
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    # 控制PyTorch数据加载的随机性
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    print(f"✅ 所有随机种子已固定为：{seed}")
 
-from codes.components.nn.dataProcess import DataProcess
-from codes.components.nn.ellipticDataProcess import ellipticDataProcess
-from codes.components.nn.ellipticGraph import ellipticGraph
-from codes.components.nn.graph import Graph
-from codes.components.nn.Agent import Agent
-from codes.components.nn.expander import Expander
 
-def plot_training_loss(history, dfname, save_dir="./"):
-    save_path = os.path.join(save_dir, f"{dfname}_training_loss.png")
-    epochs = range(1, len(history['loss']) + 1)
-    plt.figure(figsize=(10, 6))
-    plt.plot(epochs, history['loss'], 'b-', linewidth=2, label='Training loss')
-    plt.axhline(y=np.mean(history['loss']), color='r', linestyle='--',
-                label=f'Mean loss: {np.mean(history["loss"]):.4f}')
-    plt.title(f'{dfname} Training Loss Curve', fontsize=14)
-    plt.xlabel('Epochs', fontsize=12)
-    plt.ylabel('Loss', fontsize=12)
-    plt.legend(fontsize=10)
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_test_metrics(pred_results, dfname, save_dir="./"):
-    save_path = os.path.join(save_dir, f"{dfname}_test_metrics.png")
-    seeds = [f"Seed {i+1}" for i in range(len(pred_results['seed_node']))]
-    precision = pred_results['precision']
-    recall = pred_results['recall']
-    f1 = pred_results['f1']
-    jaccard = pred_results['jaccard']
-
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
-    fig.suptitle(f'{dfname} Test Metrics', fontsize=16)
-
-    axes[0,0].bar(seeds, precision, color='skyblue', alpha=0.8)
-    axes[0,0].axhline(y=np.mean(precision), color='r', linestyle='--',
-                      label=f'Mean: {np.mean(precision):.4f}')
-    axes[0,0].set_title('Precision', fontsize=12)
-    axes[0,0].set_ylabel('Value', fontsize=10)
-    axes[0,0].legend()
-    axes[0,0].grid(alpha=0.3)
-
-    axes[0,1].bar(seeds, recall, color='lightgreen', alpha=0.8)
-    axes[0,1].axhline(y=np.mean(recall), color='r', linestyle='--',
-                      label=f'Mean: {np.mean(recall):.4f}')
-    axes[0,1].set_title('Recall', fontsize=12)
-    axes[0,1].set_ylabel('Value', fontsize=10)
-    axes[0,1].legend()
-    axes[0,1].grid(alpha=0.3)
-
-    axes[1,0].bar(seeds, f1, color='orange', alpha=0.8)
-    axes[1,0].axhline(y=np.mean(f1), color='r', linestyle='--',
-                      label=f'Mean: {np.mean(f1):.4f}')
-    axes[1,0].set_title('F1-Score', fontsize=12)
-    axes[1,0].set_xlabel('Seed Nodes', fontsize=10)
-    axes[1,0].set_ylabel('Value', fontsize=10)
-    axes[1,0].legend()
-    axes[1,0].grid(alpha=0.3)
-
-    axes[1,1].bar(seeds, jaccard, color='purple', alpha=0.8)
-    axes[1,1].axhline(y=np.mean(jaccard), color='r', linestyle='--',
-                      label=f'Mean: {np.mean(jaccard):.4f}')
-    axes[1,1].set_title('Jaccard Similarity', fontsize=12)
-    axes[1,1].set_xlabel('Seed Nodes', fontsize=10)
-    axes[1,1].set_ylabel('Value', fontsize=10)
-    axes[1,1].legend()
-    axes[1,1].grid(alpha=0.3)
-
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_community_size(pred_results, dfname, save_dir="./"):
-    save_path = os.path.join(save_dir, f"{dfname}_community_sizes.png")
-    seeds = [f"Seed {i+1}" for i in range(len(pred_results['seed_node']))]
-    true_size = [len(c) for c in pred_results['true_community']]
-    pred_size = [len(c) for c in pred_results['pred_community']]
-
-    plt.figure(figsize=(12, 6))
-    x = np.arange(len(seeds))
-    width = 0.35
-
-    plt.bar(x - width/2, true_size, width, label='True Community Size', color='royalblue', alpha=0.8)
-    plt.bar(x + width/2, pred_size, width, label='Pred Community Size', color='tomato', alpha=0.8)
-
-    plt.title(f'{dfname} Community Size Comparison', fontsize=14)
-    plt.xlabel('Test Seed Nodes', fontsize=12)
-    plt.ylabel('Number of Nodes', fontsize=12)
-    plt.xticks(x, seeds)
-    plt.legend(fontsize=10)
-    plt.grid(alpha=0.3)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def run(dfname: str, seedNum:int, epochs: int, test_seed_num: int):
-    print("=" * 60)
-    print(f"Starting experiment on dataset: {dfname}")
-    print(f"Epochs: {epochs} | Train seeds per epoch: {seedNum} | Test seeds: {test_seed_num}")
-    print("=" * 60)
-
-    # Train logic
-    if dfname not in ["elliptic_txs", "elliptic2"]:
-        d_train = DataProcess(dfname=dfname)
-        train_g = Graph(
-            dffeature=d_train.train_feature, 
-            dfhacker=d_train.train_hacker, 
-            dfnode=d_train.train_nodes
-        )
-    else:
-        d_train = ellipticDataProcess(dfname=dfname)
-        train_g = ellipticGraph(
-            dfedge=d_train.train_edge, 
-            dffeature=d_train.train_feature,
-            dfnode=d_train.train_nodes, 
-            dfhacker=d_train.train_hacker
-        )
-
-    model = Agent(input_size=train_g.embedsize, hidden_size=128)
-    optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
-    e_train = Expander(graph=train_g, optimizer=optimizer, model=model)
-    history = {'loss': []}
-
-    print("\n[Training Start]")
-    for epoch in range(1, epochs + 1):
-        train_seeds = random.sample(train_g.df_hacker["address"].values.tolist(), k=seedNum)
-        isweak = []
-        truecom = []
-
-        for s in train_seeds:
-            c, w = train_g.sampleTrajectory(s)
-            truecom.append(c)
-            isweak.append(w)
-
-        loss = e_train.trainReward(seeds=train_seeds, true_coms=truecom, isweak=isweak)
-        history['loss'].append(loss)
-
-        if epoch % 1 == 0:
-            print(f"Epoch [{epoch}/{epochs}] | Loss: {loss:.6f}")
-
-    print("[Training Finished]")
-
-    # ======================
-    # Fixed test logic HERE
-    # ======================
-    if dfname not in ["elliptic_txs", "elliptic2"]:
-        d_full = DataProcess(dfname=dfname)
-        full_feature = pd.concat([d_full.train_feature, d_full.test_feature], ignore_index=True).drop_duplicates()
-        full_nodes = pd.concat([d_full.train_nodes, d_full.test_nodes], ignore_index=True).drop_duplicates()
-        full_hacker = pd.concat([d_full.train_hacker, d_full.test_hacker], ignore_index=True).drop_duplicates()
-        full_g = Graph(dffeature=full_feature, dfhacker=full_hacker, dfnode=full_nodes)
-        test_seeds_pool = d_full.test_hacker["address"].unique().tolist()
-    else:
-        d_full = ellipticDataProcess(dfname=dfname)
-        full_edge = pd.concat([d_full.train_edge, d_full.test_edge], ignore_index=True).drop_duplicates()
-        full_feature = pd.concat([d_full.train_feature, d_full.test_feature], ignore_index=True).drop_duplicates()
-        full_nodes = pd.concat([d_full.train_nodes, d_full.test_nodes], ignore_index=True).drop_duplicates()
-        full_hacker = pd.concat([d_full.train_hacker, d_full.test_hacker], ignore_index=True).drop_duplicates()
-        full_g = ellipticGraph(dfedge=full_edge, dffeature=full_feature, dfnode=full_nodes, dfhacker=full_hacker)
-        test_seeds_pool = d_full.test_hacker["address"].unique().tolist()
-
-    model.eval()
-    e_test = Expander(graph=full_g, optimizer=optimizer, model=model)
-
-    if len(test_seeds_pool) < test_seed_num:
-        test_seed_num = len(test_seeds_pool)
-    test_seeds = random.sample(test_seeds_pool, k=test_seed_num)
-
-    pred_results = {
-        "seed_node": [],
-        "pred_community": [],
-        "true_community": [],
+def eval_model(expander: Expander, test_g: Graph, test_seeds: List,conf:Configure) -> dict:
+    """
+    评估模型在测试集上的表现（适配Expander的sample_bs_trajectories方法）
+    Args:
+        expander: 初始化好的Expander实例（已切换到test_g）
+        test_g: 测试集的Graph实例
+        test_seeds: 测试集的种子节点列表
+    Returns:
+        包含所有评估指标平均值的字典
+    """
+    # 确保模型处于评估模式（锁定参数，禁用dropout等）
+    expander.model.eval()
+    
+    # 存储所有样本的指标
+    all_metrics = {
         "precision": [],
         "recall": [],
         "f1": [],
-        "jaccard": []
+        "jaccard": [],
+        "f2": []
     }
-
-    print("\n[Testing Start]")
+    
+    # 禁用梯度计算（加速评估，节省内存）
     with torch.no_grad():
+        # 批量预测轨迹（复用Expander的sample_bs_trajectories方法）
+        pred_coms, _ = expander.sample_bs_trajectories(test_seeds)
+        
+        # 遍历每个种子计算指标
         for idx, seed in enumerate(test_seeds):
-            true_com, _ = full_g.sampleTrajectory(seed)
-            true_com_set = set(true_com)
+            # 获取真实社区
+            true_com = test_g.sampleTrajectory(seed,traj_length=conf.maxTraLen)
+            # 清理预测社区（移除Stp标记）
+            pred_com = [node for node in pred_coms[idx] if node != "Stp"]
+            
+            # 使用Expander内置的指标计算方法
+            p, r, f1, j = expander.eval_scores(pred_com, true_com)
+            f2 = expander.eval_fbeta(pred_com, true_com, beta=2.0)
+            
+            # 收集指标
+            all_metrics["precision"].append(p)
+            all_metrics["recall"].append(r)
+            all_metrics["f1"].append(f1)
+            all_metrics["jaccard"].append(j)
+            all_metrics["f2"].append(f2)
+    
+    # 计算平均值
+    avg_metrics = {
+        "avg_precision": round(np.mean(all_metrics["precision"]), 4),
+        "avg_recall": round(np.mean(all_metrics["recall"]), 4),
+        "avg_f1": round(np.mean(all_metrics["f1"]), 4),
+        "avg_jaccard": round(np.mean(all_metrics["jaccard"]), 4),
+        "avg_f2": round(np.mean(all_metrics["f2"]), 4),
+        "std_f1": round(np.std(all_metrics["f1"]), 4)  # F1标准差，评估稳定性
+    }
+    
+    # 打印评估结果
+    print("\n" + "="*60)
+    print("📊 模型测试集评估结果")
+    print("="*60)
+    print(f"测试种子数量：{len(test_seeds)}")
+    print(f"平均精度(P)：{avg_metrics['avg_precision']}")
+    print(f"平均召回(R)：{avg_metrics['avg_recall']}")
+    print(f"平均F1分数：{avg_metrics['avg_f1']} (±{avg_metrics['std_f1']})")
+    print(f"平均F2分数：{avg_metrics['avg_f2']}")
+    print(f"平均Jaccard系数：{avg_metrics['avg_jaccard']}")
+    print("="*60)
+    
+    return avg_metrics
 
-            pred_tra, _ = e_test.sample_bs_trajectories([seed])
-            pred_com = [node for node in pred_tra[0] if node != "Stp" and node in full_g.deMap]
-            pred_com_set = set(pred_com)
 
-            tp = len(true_com_set & pred_com_set)
-            fp = len(pred_com_set - true_com_set)
-            fn = len(true_com_set - pred_com_set)
+def run(dfname, conf: Configure, seed: int = 42):
+    """
+    测试Expander类核心功能（复用真实Graph+elliptic数据集）：
+    1. 加载elliptic数据集并初始化Graph
+    2. 初始化Expander（真实Graph+Agent+优化器）
+    3. 测试trainReward方法（移除isweak后）
+    4. 验证损失计算和指标输出
+    5. 在测试集上评估模型表现
+    """
+    # 第一步：固定随机种子（核心修改）
+    set_seed(seed)
+    
+    try:
+        # ===================== 1. 加载真实数据并初始化Graph =====================
+        # 初始化数据处理类（加载elliptic数据集）
+        dp = dataProcess(
+            dfname=conf.dfname,
+            normal_node_ratio= conf.normal_node_ratio,
+            expand_hop = conf.expand_hop,
+            min_community_size=conf.min_community_size
+        )
+        print("✅ dataProcess初始化成功")
+        
+        print("tes_n",len(dp.test_nodes))
+        print("tes_h",len(dp.test_hacker))
+        print("tra_n",len(dp.train_nodes))
+        print("tra_h",len(dp.train_hacker))
 
-            precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-            recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-            f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
-            jaccard = tp / (len(true_com_set | pred_com_set)) if len(true_com_set | pred_com_set) > 0 else 0.0
+        # 初始化真实Graph类（使用训练集数据）
+        g = Graph(
+            dfnode=dp.train_nodes,
+            dffeature=dp.train_feature,
+            dfhacker=dp.train_hacker,
+            dfedge=dp.train_edge
+        )
+        print(f"✅ Graph类初始化成功（基于{dfname}训练集）")
 
-            pred_results["seed_node"].append(seed)
-            pred_results["pred_community"].append(pred_com)
-            pred_results["true_community"].append(true_com)
-            pred_results["precision"].append(precision)
-            pred_results["recall"].append(recall)
-            pred_results["f1"].append(f1)
-            pred_results["jaccard"].append(jaccard)
+        # ===================== 2. 初始化Expander组件 =====================
+        device = torch.device(conf.device) 
+        # 初始化Agent模型（输入维度匹配Graph的embedsize）
+        model = Agent(input_size=g.embedsize,hidden_size=128).to(device)
+        # 初始化优化器
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        
+        # 初始化Expander
+        expander = Expander(
+            graph=g,
+            model=model,
+            optimizer=optimizer,
+            device=device,
+            maxLen=conf.maxTraLen,  
+            gamma=conf.gamma,
+            min_reward_threshold=conf.min_reward_threshold,
+            invalid_penalty=conf.invalid_penalty
+        )
+        print("✅ Expander初始化成功")
 
-            print(f"Test Seed {idx+1}/{len(test_seeds)} | P: {precision:.4f} | R: {recall:.4f} | F1: {f1:.4f} | Jaccard: {jaccard:.4f}")
+        # ===================== 3. 训练过程 =====================
+        # 从训练集黑客节点中选种子（避免空数据）
+        if len(dp.train_hacker) < 2:
+            raise ValueError("训练集黑客节点数量不足，无法测试")
+        
+        origin_seeds = dp.train_hacker["address"].values.tolist()  
+        for i in range(conf.epoch):
+            # 由于固定了种子，random.sample的结果每次都一致
+            seeds=random.sample(origin_seeds,k=conf.seedNum)
+            
+            true_coms = [g.sampleTrajectory(s,traj_length=conf.maxTraLen) for s in seeds]
+          
+            print(f"✅ 构造真实社区完成，社区大小：{[len(c) for c in true_coms]}")
 
-    print("[Testing Finished]")
+            # 测试trainReward方法
+            loss, metrics = expander.trainReward(seeds=seeds, true_coms=true_coms)
+            print(f"\n===================== 第{i}次训练结果 =====================")
+            print(f"✅ trainReward执行成功")
+            print(f"   本次训练损失值：{loss:.4f}")
+            print(f"   平均精度(P)：{metrics['avg_precision']}")
+            print(f"   平均召回(R)：{metrics['avg_recall']}")
+            print(f"   平均F1分数：{metrics['avg_f1']}")
+            print(f"   平均F2分数：{metrics['avg_f2']}")
+            print(f"   平均Jaccard系数：{metrics['avg_jaccard']}")
+        
+        # ===================== 4. 测试集评估 =====================
+        print("\n🔍 开始在测试集上评估模型...")
+        # 初始化测试集Graph
+        test_g  = Graph(
+            dfnode=dp.test_nodes,
+            dffeature=dp.test_feature,
+            dfhacker=dp.test_hacker,
+            dfedge=dp.test_edge
+        )
 
-    print("\n[Saving plots...]")
-    plot_training_loss(history, dfname)
-    plot_test_metrics(pred_results, dfname)
-    plot_community_size(pred_results, dfname)
-    print("Plots saved successfully.\n")
+        # 切换Expander到测试集Graph
+        expander.graph = test_g
+        
+        # 准备测试集种子（避免数量不足）
+        test_seeds = dp.test_hacker["address"].values.tolist()
+        if len(test_seeds) == 0:
+            raise ValueError("测试集无黑客节点，无法评估")
+        # 限制测试种子数量（避免评估过久）
+        test_seeds = test_seeds[:min(conf.seedNum * 2, len(test_seeds))]
+        
+        # 执行评估
+        test_metrics = eval_model(expander, test_g, test_seeds,conf)
+        
+        return test_metrics
 
-    print("=" * 60)
-    print(f"Experiment {dfname} completed!")
-    print(f"Avg Precision: {np.mean(pred_results['precision']):.4f}")
-    print(f"Avg Recall:    {np.mean(pred_results['recall']):.4f}")
-    print(f"Avg F1:        {np.mean(pred_results['f1']):.4f}")
-    print(f"Avg Jaccard:   {np.mean(pred_results['jaccard']):.4f}")
-    print("=" * 60)
+    except Exception as e:
+        print(f"\n❌ 测试失败：{e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
-    return history, pred_results
+
+# # 执行测试
+# def test_expander():
+#     # 初始化配置（根据你的Configure类调整）
+#     conf = Configure(dfname="elliptic")
+#     conf.normal_node_ratio = 0.8
+#     conf.expand_hop = 2
+#     conf.min_community_size = 5
+#     conf.device = "cuda" if torch.cuda.is_available() else "cpu"
+#     conf.maxTraLen = 10
+#     conf.gamma = 0.99
+#     conf.min_reward_threshold = 0.001
+#     conf.invalid_penalty = 0.01
+#     conf.seedNum = 2  # 每轮训练种子数
+#     conf.epoch = 5    # 训练轮数
+    
+#     # 运行测试和评估（指定固定种子）
+#     run("elliptic", conf, seed=42)  # 可自定义种子值，比如100、2024等
+
+# if __name__ == "__main__":
+#     test_expander()
