@@ -128,6 +128,10 @@ def run(dfname, conf: Configure, seed: int = 42):
             device=device,
             maxLen=conf.maxTraLen,
             gamma=conf.gamma,
+            reward_weight_abs=conf.reward_weight_abs,
+            reward_weight_delta=conf.reward_weight_delta,
+            len_penalty_base=conf.len_penalty_base,
+
         )
         print("✅ Expander初始化成功")
 

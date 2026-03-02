@@ -29,8 +29,8 @@ def train_single_dataset(dfname: str, seed: int = 2026):
     conf.gamma = 0.99
     conf.min_reward_threshold = 0.001
     conf.invalid_penalty = 0.02
-    conf.seedNum = 2  # 每轮训练种子数
-    conf.epoch = 3    # 训练轮数
+    conf.seedNum = 40  # 每轮训练种子数
+    conf.epoch = 30    # 训练轮数
     
     # 运行训练和评估
     try:
@@ -80,6 +80,6 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 定义要训练的数据集列表
-    dataset_list = ["elliptic"]
+    dataset_list = ["elliptic","elliptic2","ibm"]
     # 调用总函数开始批量训练
     final_results = train_all_datasets(dataset_list, seed=2026)
