@@ -10,7 +10,6 @@ from .Agent import Agent
 from .expander import Expander
 from .configure import Configure
 import random
-from sklearn.metrics import average_precision_score  # 仅新增：AUC-PR依赖
 
 def set_seed(seed: int = 42):
     random.seed(seed)
@@ -23,15 +22,6 @@ def set_seed(seed: int = 42):
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"✅ 所有随机种子已固定为：{seed}")
 
-# 仅新增：极简Recall@TopK计算
-def recall_at_top_k(pred_com, true_com, k_percent=1.0):
-    if not pred_com or not true_com:
-        return 0.0
-    top_k = max(1, int(len(pred_com) * k_percent / 100))
-    hit = len(set(pred_com[:top_k]) & set(true_com))
-    return hit / len(true_com) if len(true_com) > 0 else 0.0
-
-# 核心修改：仅补充指标收集和计算，其余逻辑不变
 def eval_model(
     expander: Expander, test_g: Graph, test_seeds: List, conf: Configure
 ) -> dict:
@@ -39,75 +29,90 @@ def eval_model(
     all_metrics = {
         "precision": [],
         "recall": [],
-        "f1": [],
-        "auc_pr": [],  # 新增：AUC-PR
-        "recall_top1": [],  # 新增：Recall@Top1%
-        "recall_top5": []   # 新增：Recall@Top5%
+        "f1": []
     }
+
+    print(f"\n🔧 测试参数：")
+    print(f"   种子数：{len(test_seeds)}")
+    print(f"   maxTraLen：{conf.maxTraLen}")
+    print(f"   device：{conf.device}")
+    print("-" * 60)
 
     with torch.no_grad():
         pred_coms, _ = expander.sample_bs_trajectories(test_seeds)
 
+        batch_size = 10
         for idx, seed in enumerate(test_seeds):
             true_com = test_g.sampleTrajectory(seed, traj_length=conf.maxTraLen)
             pred_com = [node for node in pred_coms[idx] if node != "Stp"]
             p, r, f1 = expander.eval_scores(pred_com, true_com)
 
-            # 仅新增：计算AUC-PR（复用Expander的逻辑）
-            ap = expander.eval_auc_pr(pred_com, set(true_com)) if hasattr(expander, 'eval_auc_pr') else 0.0
-            # 仅新增：计算Recall@TopK
-            r1 = recall_at_top_k(pred_com, true_com, 1.0)
-            r5 = recall_at_top_k(pred_com, true_com, 5.0)
-
-            # 仅新增：收集新指标
-            all_metrics["auc_pr"].append(ap)
-            all_metrics["recall_top1"].append(r1)
-            all_metrics["recall_top5"].append(r5)
             all_metrics["precision"].append(p)
             all_metrics["recall"].append(r)
             all_metrics["f1"].append(f1)
 
-    # 仅新增：新指标的均值/标准差
+            if (idx + 1) % batch_size == 0 or idx == len(test_seeds) - 1:
+                print(f"📈 进度：{idx+1}/{len(test_seeds)}")
+                print(f"   P: {np.mean(all_metrics['precision'][-batch_size:]):.4f}")
+                print(f"   R: {np.mean(all_metrics['recall'][-batch_size:]):.4f}")
+                print(f"   F1: {np.mean(all_metrics['f1'][-batch_size:]):.4f}")
+                print("-" * 40)
+
     avg_metrics = {
         "avg_precision": round(np.mean(all_metrics["precision"]), 4),
         "avg_recall": round(np.mean(all_metrics["recall"]), 4),
         "avg_f1": round(np.mean(all_metrics["f1"]), 4),
-        "std_f1": round(np.std(all_metrics["f1"]), 4),
-        "avg_auc_pr": round(np.mean(all_metrics["auc_pr"]), 4),  # 新增
-        "avg_recall_top1": round(np.mean(all_metrics["recall_top1"]), 4),  # 新增
-        "avg_recall_top5": round(np.mean(all_metrics["recall_top5"]), 4)   # 新增
+        "std_f1": round(np.std(all_metrics["f1"]), 4)
     }
 
-    # 仅新增：打印新指标
     print("\n" + "=" * 60)
-    print("📊 模型测试集评估结果")
+    print("📊 测试集最终结果")
     print("=" * 60)
-    print(f"测试种子数量：{len(test_seeds)}")
-    print(f"平均精度(P)：{avg_metrics['avg_precision']}")
-    print(f"平均召回(R)：{avg_metrics['avg_recall']}")
-    print(f"平均F1分数：{avg_metrics['avg_f1']} (±{avg_metrics['std_f1']})")
-    print(f"平均AUC-PR：{avg_metrics['avg_auc_pr']}")  # 新增
-    print(f"平均Recall@Top1%：{avg_metrics['avg_recall_top1']}")  # 新增
-    print(f"平均Recall@Top5%：{avg_metrics['avg_recall_top5']}")  # 新增
+    print(f"P: {avg_metrics['avg_precision']}")
+    print(f"R: {avg_metrics['avg_recall']}")
+    print(f"F1: {avg_metrics['avg_f1']} (±{avg_metrics['std_f1']})")
     print("=" * 60)
 
     return avg_metrics
 
 def run(dfname, conf: Configure, seed: int = 42):
     set_seed(seed)
+    # 新增：给Configure补充epoch参数（避免KeyError）
+    if not hasattr(conf, 'epoch'):
+        conf.epoch = 30  # 默认30轮训练，和你的日志一致
+    
     try:
+        print(f"\n{'='*70}")
+        print(f"📌 数据集：{dfname}  seed={seed}")
+        print(f"{'='*70}")
+        print(f"参数：")
+        print(f"  normal_node_ratio   {conf.normal_node_ratio}")
+        print(f"  expand_hop          {conf.expand_hop}")
+        print(f"  min_community_size  {conf.min_community_size}")
+        print(f"  seedNum             {conf.seedNum}")
+        print(f"  maxTraLen           {conf.maxTraLen}")
+        print(f"  gamma               {conf.gamma}")
+        print(f"  f1_base_weight      {conf.f1_base_weight}")
+        print(f"  p_bias              {conf.p_bias}")
+        print(f"  min_f1_threshold    {conf.min_f1_threshold}")
+        print(f"  len_penalty_coeff   {conf.len_penalty_coeff}")
+        print(f"  epoch               {conf.epoch}")
+        print("-" * 70)
+
         dp = dataProcess(
             dfname=conf.dfname,
             normal_node_ratio=conf.normal_node_ratio,
             expand_hop=conf.expand_hop,
             min_community_size=conf.min_community_size,
         )
-        print("✅ dataProcess初始化成功")
+        print("✅ dataProcess 完成")
 
-        print("tes_n", len(dp.test_nodes))
-        print("tes_h", len(dp.test_hacker))
-        print("tra_n", len(dp.train_nodes))
-        print("tra_h", len(dp.train_hacker))
+        print(f"\n数据规模：")
+        print(f"  训练节点：{len(dp.train_nodes)}")
+        print(f"  训练黑客：{len(dp.train_hacker)}")
+        print(f"  测试节点：{len(dp.test_nodes)}")
+        print(f"  测试黑客：{len(dp.test_hacker)}")
+        print("-" * 70)
 
         g = Graph(
             dfnode=dp.train_nodes,
@@ -115,7 +120,7 @@ def run(dfname, conf: Configure, seed: int = 42):
             dfhacker=dp.train_hacker,
             dfedge=dp.train_edge,
         )
-        print(f"✅ Graph类初始化成功（基于{dfname}训练集）")
+        print("✅ 训练图构建完成")
 
         device = torch.device(conf.device)
         model = Agent(input_size=g.embedsize, hidden_size=128).to(device)
@@ -128,26 +133,29 @@ def run(dfname, conf: Configure, seed: int = 42):
             device=device,
             maxLen=conf.maxTraLen,
             gamma=conf.gamma,
-            reward_weight_abs=conf.reward_weight_abs,
-            reward_weight_delta=conf.reward_weight_delta,
-            len_penalty_base=conf.len_penalty_base,
-
+            f1_base_weight=conf.f1_base_weight,
+            p_bias=conf.p_bias,
+            min_f1_threshold=conf.min_f1_threshold,
+            len_penalty_coeff=conf.len_penalty_coeff
         )
-        print("✅ Expander初始化成功")
+        print("✅ Expander 初始化完成")
 
         origin_seeds = dp.train_hacker["address"].values.tolist()
+        print(f"\n🚀 开始训练，每轮采样 {conf.seedNum} 个种子，共 {conf.epoch} 轮")
+
         for i in range(conf.epoch):
             seeds = random.sample(origin_seeds, k=conf.seedNum)
             true_coms = [
                 g.sampleTrajectory(s, traj_length=conf.maxTraLen) for s in seeds
             ]
-
-            print(f"\n===================== 第{i}次训练结果 =====================")
+            print(f"\n📝 Epoch {i}")
             loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
-            print(f"✅ trainReward执行成功")
-            print(f"   本次训练损失值：{loss:.4f}")
+            print(f"loss: {loss:.4f}")
 
-        print("\n🔍 开始在测试集上评估模型...")
+        print(f"\n{'='*70}")
+        print("🧪 开始测试")
+        print(f"{'='*70}")
+
         test_g = Graph(
             dfnode=dp.test_nodes,
             dffeature=dp.test_feature,
@@ -157,12 +165,20 @@ def run(dfname, conf: Configure, seed: int = 42):
         expander.graph = test_g
         test_seeds = dp.test_hacker["address"].values.tolist()
         test_seeds = test_seeds[: min(conf.seedNum * 2, len(test_seeds))]
+        print(f"测试种子数：{len(test_seeds)}")
+
         test_metrics = eval_model(expander, test_g, test_seeds, conf)
+        
+        # 修复：只打印存在的指标，删除AUC-PR/TopK相关
+        print(f"\n✅ 数据集 {dfname} 训练完成！")
+        print(f"   最终测试集F1：{test_metrics['avg_f1']}")
+        print(f"   最终测试集P：{test_metrics['avg_precision']}")
+        print(f"   最终测试集R：{test_metrics['avg_recall']}")
 
         return test_metrics
 
     except Exception as e:
-        print(f"\n❌ 测试失败：{e}")
+        print(f"\n❌ 运行失败：{e}")
         import traceback
         traceback.print_exc()
         return None
