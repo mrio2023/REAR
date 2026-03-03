@@ -24,7 +24,7 @@ def train_single_dataset(dfname: str, seed: int = 2026):
     if dfname == "ibm":
         # 1. 数据层面：极致减少无关节点干扰
         conf.normal_node_ratio = 3        # 正常节点=黑客×3（比8更少，几乎只留黑客相关节点）
-        conf.expand_hop = 0               # 0跳扩张：只保留种子黑客节点，不扩任何邻居（彻底避免无关节点）
+        conf.expand_hop = 2               # 0跳扩张：只保留种子黑客节点，不扩任何邻居（彻底避免无关节点）
         conf.min_community_size = 1       # 保留所有社区（哪怕只有1个节点，不过滤任何黑客）
         
         # 2. 奖励层面：纯精度惩罚，F1完全向精度倾斜
@@ -35,8 +35,8 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         # 3. 训练层面：限制扩张步数+充分训练
         conf.maxTraLen = 2                # 最多扩2步（几乎等于不扩）
         conf.gamma = 0.90                 # 只关注当前步的精度，完全忽略长期召回
-        conf.seedNum = 60                 # 更多种子覆盖所有分散/重叠社区
-        conf.epoch = 40                   # 更多轮数让模型收敛到“精准找节点”
+        conf.seedNum = 40                 # 更多种子覆盖所有分散/重叠社区
+        conf.epoch = 30                   # 更多轮数让模型收敛到“精准找节点”
         
     else:
         # elliptic/elliptic2 通用参数（保留原配置）
@@ -44,9 +44,9 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         conf.expand_hop = 2
         conf.min_community_size = 5
         conf.maxTraLen = 16
-        conf.p_bias = 0.6
-        conf.len_penalty_coeff = 0.8
-        conf.min_f1_threshold = 0.35
+        conf.p_bias = 0.3
+        conf.len_penalty_coeff = 0.9
+        conf.min_f1_threshold = 0.2
         conf.gamma = 0.99
         conf.seedNum = 40
         conf.epoch = 30
@@ -94,5 +94,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
     return all_results
 
 if __name__ == "__main__":
-    dataset_list = ["ibm"]
+    dataset_list = ["elliptic"]
     final_results = train_all_datasets(dataset_list, seed=2026)
