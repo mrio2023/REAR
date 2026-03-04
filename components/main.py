@@ -3,7 +3,6 @@ import os
 from nn.starter import run
 from nn.configure import Configure
 
-# 自动跳转到sci目录
 current_file = os.path.abspath(__file__)
 components_dir = os.path.dirname(current_file)
 codes_dir = os.path.dirname(components_dir)
@@ -11,16 +10,12 @@ sci_dir = os.path.dirname(codes_dir)
 os.chdir(sci_dir)
 
 def train_single_dataset(dfname: str, seed: int = 2026):
-    """
-    训练单个数据集的函数（IBM 纯精度导向：极致优先精度，放弃部分召回）
-    """
     print(f"\n{'='*70}")
     print(f"🚀 开始训练数据集：{dfname} (种子={seed})")
     print(f"{'='*70}")
     
     conf = Configure(dfname=dfname)
     
-    # ===================== IBM 纯精度导向参数（核心调整） =====================
     if dfname == "ibm":
         # 1. 数据层面：极致减少无关节点干扰
         conf.normal_node_ratio = 3        # 正常节点=黑客×3（比8更少，几乎只留黑客相关节点）
@@ -36,10 +31,23 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         conf.maxTraLen = 2                # 最多扩2步（几乎等于不扩）
         conf.gamma = 0.90                 # 只关注当前步的精度，完全忽略长期召回
         conf.seedNum = 40                 # 更多种子覆盖所有分散/重叠社区
-        conf.epoch = 30                   # 更多轮数让模型收敛到“精准找节点”
+        conf.epoch = 30                   # 更多轮数让模型收敛到“精准找节点”               
         
-    else:
-        # elliptic/elliptic2 通用参数（保留原配置）
+    elif dfname == "elliptic":
+        # elliptic 纯Recall偏好配置（使用你挑好的参数）
+        conf.normal_node_ratio = 2        # 保持你调好的原值
+        conf.expand_hop = 2               # 保持你调好的原值
+        conf.min_community_size = 2       # 保持你调好的原值
+        conf.maxTraLen = 100              # 保持你调好的原值
+        conf.p_bias = 0.8                 # 精度倾斜→0（奖励完全偏向召回）
+        conf.len_penalty_coeff = 0.99     # 长度惩罚→极低（允许模型多扩张）
+        conf.min_f1_threshold = 0.8       # F1阈值→极低（优先召回，放宽奖励条件）
+        conf.gamma = 0.99                 # 保持你调好的原值
+        conf.seedNum = 40                 # 保持你调好的原值
+        conf.epoch = 30                   # 保持你调好的原值
+        
+    elif dfname == "elliptic2":
+        # elliptic2 配置回原来的通用参数
         conf.normal_node_ratio = 2
         conf.expand_hop = 2
         conf.min_community_size = 5
@@ -51,11 +59,10 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         conf.seedNum = 40
         conf.epoch = 30
     
-    # 公共参数
+    # 公共参数保持原有配置，完全不动
     conf.device = "cuda" if torch.cuda.is_available() else "cpu"
-    conf.f1_base_weight = 1.0            # F1基础权重不变，但p_bias=1.0时F1≈精度
+    conf.f1_base_weight = 1.0
     
-    # 运行训练和评估
     try:
         test_metrics = run(dfname, conf, seed=seed)
         if test_metrics:
@@ -79,7 +86,6 @@ def train_all_datasets(datasets: list, seed: int = 2026):
         metrics = train_single_dataset(dfname, seed=seed)
         all_results[dfname] = metrics
     
-    # 汇总打印
     print(f"\n{'='*70}")
     print("📊 所有数据集训练结果汇总")
     print(f"{'='*70}")
@@ -94,5 +100,6 @@ def train_all_datasets(datasets: list, seed: int = 2026):
     return all_results
 
 if __name__ == "__main__":
-    dataset_list = ["elliptic"]
+    # 可根据需要调整要训练的数据集列表，比如同时训练三个：["elliptic","elliptic2","ibm"]
+    dataset_list = ["ibm"]
     final_results = train_all_datasets(dataset_list, seed=2026)
