@@ -195,7 +195,7 @@ def run(dfname, conf: Configure, seed: int = 42):
         start_model_init = time.time()
         device = torch.device(conf.device)
         model = Agent(input_size=g.embedsize, hidden_size=128).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
         expander = Expander(
             graph=g,

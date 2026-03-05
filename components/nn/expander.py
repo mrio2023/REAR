@@ -174,7 +174,7 @@ class Expander:
         return tra_nodes, tra_logps
 
     def trainReward(self, seeds: List[int], true_coms):
-        """核心训练逻辑：F1主导+精度倾斜的奖励函数"""
+        """核心训练逻辑：修复执行顺序+验证梯度流向"""
         self.model.train()
         self.optimizer.zero_grad(set_to_none=True)
         selected_nodes, logps = self.sample_bs_trajectories(seeds)
@@ -196,44 +196,39 @@ class Expander:
         }
         print(f"Batch Metrics: P={avg_metrics['avg_precision']}, R={avg_metrics['avg_recall']}, F1={avg_metrics['avg_f1']}")
 
-        # 2. F1主导的奖励计算
+        # 2. F1奖励计算（转torch张量，保留数值）
         rewards_list = []
         for idx, (com, true_com) in enumerate(zip(selected_nodes, true_coms)):
             temp_com, step_rewards = [com[0]], []
             true_com_set = set(true_com)
             true_com_len = len(true_com_set)
 
-            # 遍历每一步选择的节点
             for node in com[1:]:
                 if node == 'Stp' or node in temp_com:
                     continue
                 
-                # 计算选节点前后的F1
+                # 计算选节点前后的F1（转torch张量）
                 pre_f1 = self.eval_f1(temp_com, true_com_set)
                 temp_com.append(node)
                 curr_f1 = self.eval_f1(temp_com, true_com_set)
                 curr_p, curr_r, _ = self.eval_scores(temp_com, true_com_set)
 
-                # 精度倾斜：P<R时放大F1奖励
+                # 精度倾斜+增量奖励+长度惩罚（和你原逻辑一致）
                 if curr_p < curr_r:
                     biased_f1 = curr_f1 * (1 + self.p_bias)
                 else:
                     biased_f1 = curr_f1
 
-                # 增量奖励：仅F1提升且高于阈值才给正向奖励
                 if curr_f1 > pre_f1 and curr_f1 > self.min_f1_threshold:
                     base_reward = biased_f1 * self.f1_base_weight
                 else:
                     base_reward = 0.0
 
-                # 长度惩罚：超过真实社区长度则指数衰减
                 curr_pred_len = len(temp_com)
                 if curr_pred_len > true_com_len:
                     base_reward *= (self.len_penalty_coeff ** (curr_pred_len - true_com_len))
 
-                # 奖励约束：非负化
                 base_reward = np.clip(base_reward, 0.0, self.f1_base_weight)
-                
                 step_rewards.append(base_reward)
 
             # 折扣奖励
@@ -245,15 +240,14 @@ class Expander:
                     discounted.insert(0, cum)
             rewards_list.append(discounted if discounted else [0.0])
 
-        # 3. Loss计算
+        # 3. 奖励填充（转torch张量）
         max_len = max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps)) if (rewards_list and logps) else 0
-        # 填充奖励
         rewards_padded = np.zeros((bs, max_len))
         for i, r in enumerate(rewards_list):
             rewards_padded[i, :len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
-        # 填充logps
+        # 4. logps填充（和你原逻辑一致）
         logps_padded = []
         for lp_list in logps:
             padded = [
@@ -264,14 +258,53 @@ class Expander:
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
-        # Mask与Loss计算
+        # 5. Mask计算
         mask = (torch.arange(max_len, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
-        loss = -(rewards * logps * mask).sum()
 
-        # 梯度裁剪
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-        
-        loss.backward()
-        self.optimizer.step()
+        # ==================== 验证梯度流向的核心代码 ====================
+        # 版本1：不detach reward，打印梯度链
+        loss_no_detach = -(rewards * logps * mask).sum()   # 缩小loss规模
+        print("\n=== 不detach reward的梯度流向 ===")
+        print(f"loss.grad_fn: {loss_no_detach.grad_fn.__class__.__name__}")
+        # 追根溯源梯度链
+        grad_chain = []
+        current_fn = loss_no_detach.grad_fn
+        while current_fn is not None:
+            grad_chain.append(current_fn.__class__.__name__)
+            if hasattr(current_fn, 'next_functions') and current_fn.next_functions:
+                current_fn = current_fn.next_functions[0][0]
+            else:
+                break
+        print(f"梯度链: {' → '.join(grad_chain)}")
 
+        # 版本2：detach reward，打印梯度链
+        rewards_detach = rewards.detach()
+        loss_detach = -(rewards_detach * logps * mask).sum() * 0.01
+        print("\n=== detach reward后的梯度流向 ===")
+        print(f"loss.grad_fn: {loss_detach.grad_fn.__class__.__name__}")
+        grad_chain_detach = []
+        current_fn = loss_detach.grad_fn
+        while current_fn is not None:
+            grad_chain_detach.append(current_fn.__class__.__name__)
+            if hasattr(current_fn, 'next_functions') and current_fn.next_functions:
+                current_fn = current_fn.next_functions[0][0]
+            else:
+                break
+        print(f"梯度链: {' → '.join(grad_chain_detach)}")
+
+        # ==================== 正式训练（用detach后的loss） ====================
+        loss = loss_detach  # 用detach后的loss训练
+        # 正确的梯度计算+裁剪+更新顺序
+        loss.backward()  # 第一步：计算梯度
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 第二步：裁剪梯度
+        self.optimizer.step()  # 第三步：更新参数
+
+        # 打印关键指标（验证裁剪生效）
+        param_mean = torch.mean(torch.stack([p.data.mean() for p in self.model.parameters() if p.requires_grad]))
+        grad_mean = torch.mean(torch.stack([
+            p.grad.mean() if p.grad is not None else torch.tensor(0., device=self.device) 
+            for p in self.model.parameters() if p.requires_grad
+        ]))
+        print(f"\nGrad Check | Total Grad Norm: {grad_norm:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}")
+        print(f"loss: {loss.item():.4f}")
         return loss.item()
