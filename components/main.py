@@ -24,12 +24,12 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         
         # 2. 奖励层面：纯精度惩罚，F1完全向精度倾斜
         conf.p_bias = 1.0                 # 精度倾斜拉满（奖励只看精度，召回权重≈0）
-        conf.min_f1_threshold = 0.5       # F1底线提到0.5，精度不够直接扣光奖励
-        conf.len_penalty_coeff = 0.5      # 长度惩罚拉满（扩张1步奖励折半，逼模型不扩张）
+        conf.min_f1_threshold = 0       # F1底线提到0.5，精度不够直接扣光奖励
+        conf.len_penalty_coeff = 0.9      # 长度惩罚拉满（扩张1步奖励折半，逼模型不扩张）
         
         # 3. 训练层面：限制扩张步数+充分训练
-        conf.maxTraLen = 2                # 最多扩2步（几乎等于不扩）
-        conf.gamma = 0.90                 # 只关注当前步的精度，完全忽略长期召回
+        conf.maxTraLen = 16                
+        conf.gamma = 0.99                 # 只关注当前步的精度，完全忽略长期召回
         conf.seedNum = 40                 # 更多种子覆盖所有分散/重叠社区
         conf.epoch = 30                   # 更多轮数让模型收敛到“精准找节点”               
         
