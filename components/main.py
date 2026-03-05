@@ -1,105 +1,113 @@
 import torch
 import os
-from nn.starter import run
+from nn.starter import Starter
 from nn.configure import Configure
 
+# 设置工作目录（精简路径计算逻辑）
 current_file = os.path.abspath(__file__)
-components_dir = os.path.dirname(current_file)
-codes_dir = os.path.dirname(components_dir)
-sci_dir = os.path.dirname(codes_dir)
+sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
 os.chdir(sci_dir)
 
+# 数据集参数配置表（结构化管理，包含所有Configure必填参数）
+DATASET_CONFIGS = {
+    "ibm": {
+        # 数据层面：减少无关节点干扰
+        "normal_node_ratio": 3, "expand_hop": 2, "min_community_size": 1,
+        # 奖励层面：纯精度惩罚
+        "p_bias": 1.0, "min_f1_threshold": 0, "len_penalty_coeff": 0.9,
+        # 训练层面：限制扩张+充分训练
+        "maxTraLen": 16, "gamma": 0.99, "seedNum": 40, "epoch": 30,
+        # F1基础权重（公共参数，统一配置）
+        "f1_base_weight": 1.0
+    },
+    "elliptic": {
+        # Recall偏好配置
+        "normal_node_ratio": 2, "expand_hop": 2, "min_community_size": 2,
+        "maxTraLen": 100, "p_bias": 0.8, "len_penalty_coeff": 0.99,
+        "min_f1_threshold": 0.8, "gamma": 0.99, "seedNum": 40, "epoch": 30,
+        "f1_base_weight": 1.0
+    },
+    "elliptic2": {
+        # 通用参数
+        "normal_node_ratio": 2, "expand_hop": 2, "min_community_size": 5,
+        "maxTraLen": 16, "p_bias": 0.3, "len_penalty_coeff": 0.9,
+        "min_f1_threshold": 0.2, "gamma": 0.99, "seedNum": 40, "epoch": 30,
+        "f1_base_weight": 1.0
+    }
+}
+
 def train_single_dataset(dfname: str, seed: int = 2026):
-    print(f"\n{'='*70}")
-    print(f"🚀 开始训练数据集：{dfname} (种子={seed})")
-    print(f"{'='*70}")
+    """训练单个数据集，返回测试指标"""
+    print(f"\n{'='*70}\n🚀 开始训练数据集：{dfname} (种子={seed})\n{'='*70}")
     
-    conf = Configure(dfname=dfname)
+    # 核心修复：按Configure的参数要求，传入所有必填参数
+    if dfname not in DATASET_CONFIGS:
+        print(f"❌ 数据集 {dfname} 无配置参数，终止训练")
+        return None
     
-    if dfname == "ibm":
-        # 1. 数据层面：极致减少无关节点干扰
-        conf.normal_node_ratio = 3        # 正常节点=黑客×3（比8更少，几乎只留黑客相关节点）
-        conf.expand_hop = 2               # 0跳扩张：只保留种子黑客节点，不扩任何邻居（彻底避免无关节点）
-        conf.min_community_size = 1       # 保留所有社区（哪怕只有1个节点，不过滤任何黑客）
-        
-        # 2. 奖励层面：纯精度惩罚，F1完全向精度倾斜
-        conf.p_bias = 1.0                 # 精度倾斜拉满（奖励只看精度，召回权重≈0）
-        conf.min_f1_threshold = 0       # F1底线提到0.5，精度不够直接扣光奖励
-        conf.len_penalty_coeff = 0.9      # 长度惩罚拉满（扩张1步奖励折半，逼模型不扩张）
-        
-        # 3. 训练层面：限制扩张步数+充分训练
-        conf.maxTraLen = 16                
-        conf.gamma = 0.99                 # 只关注当前步的精度，完全忽略长期召回
-        conf.seedNum = 40                 # 更多种子覆盖所有分散/重叠社区
-        conf.epoch = 30                   # 更多轮数让模型收敛到“精准找节点”               
-        
-    elif dfname == "elliptic":
-        # elliptic 纯Recall偏好配置（使用你挑好的参数）
-        conf.normal_node_ratio = 2        # 保持你调好的原值
-        conf.expand_hop = 2               # 保持你调好的原值
-        conf.min_community_size = 2       # 保持你调好的原值
-        conf.maxTraLen = 100              # 保持你调好的原值
-        conf.p_bias = 0.8                 # 精度倾斜→0（奖励完全偏向召回）
-        conf.len_penalty_coeff = 0.99     # 长度惩罚→极低（允许模型多扩张）
-        conf.min_f1_threshold = 0.8       # F1阈值→极低（优先召回，放宽奖励条件）
-        conf.gamma = 0.99                 # 保持你调好的原值
-        conf.seedNum = 40                 # 保持你调好的原值
-        conf.epoch = 30                   # 保持你调好的原值
-        
-    elif dfname == "elliptic2":
-        # elliptic2 配置回原来的通用参数
-        conf.normal_node_ratio = 2
-        conf.expand_hop = 2
-        conf.min_community_size = 5
-        conf.maxTraLen = 16
-        conf.p_bias = 0.3
-        conf.len_penalty_coeff = 0.9
-        conf.min_f1_threshold = 0.2
-        conf.gamma = 0.99
-        conf.seedNum = 40
-        conf.epoch = 30
+    cfg = DATASET_CONFIGS[dfname]
+    # 正确初始化Configure（传入所有必填参数）
+    conf = Configure(
+        dfname=dfname,
+        normal_node_ratio=cfg["normal_node_ratio"],
+        expand_hop=cfg["expand_hop"],
+        min_community_size=cfg["min_community_size"],
+        maxTraLen=cfg["maxTraLen"],
+        gamma=cfg["gamma"],
+        f1_base_weight=cfg["f1_base_weight"],
+        p_bias=cfg["p_bias"],
+        min_f1_threshold=cfg["min_f1_threshold"],
+        len_penalty_coeff=cfg["len_penalty_coeff"],
+        seedNum=cfg["seedNum"],
+        # device保留自动检测（Configure内部处理）
+        device=None
+    )
     
-    # 公共参数保持原有配置，完全不动
-    conf.device = "cuda" if torch.cuda.is_available() else "cpu"
-    conf.f1_base_weight = 1.0
+    # 补充epoch参数（Configure没有这个参数，给conf对象新增）
+    conf.epoch = cfg["epoch"]
     
+    # 修正设备参数（可选，Configure内部已自动检测，这里可省略）
+    # conf.device = "cuda" if torch.cuda.is_available() else "cpu"
+    
+    # 初始化Starter并调用run方法
+    starter = Starter(conf=conf)
     try:
-        test_metrics = run(dfname, conf, seed=seed)
-        if test_metrics:
-            print(f"\n✅ 数据集 {dfname} 训练完成！")
-            print(f"   最终测试集F1：{test_metrics['avg_f1']:.4f}")
-            print(f"   最终测试集P：{test_metrics['avg_precision']:.4f}")
-            print(f"   最终测试集R：{test_metrics['avg_recall']:.4f}")
-        else:
-            print(f"\n✅ 数据集 {dfname} 训练完成！最终测试集F1：N/A")
+        test_metrics = starter.run(dfname=dfname, seed=seed)
+        
+        # 打印结果
+        f1 = test_metrics['avg_f1'] if test_metrics else "N/A"
+        p = test_metrics['avg_precision'] if test_metrics else "N/A"
+        r = test_metrics['avg_recall'] if test_metrics else "N/A"
+        print(f"\n✅ 数据集 {dfname} 训练完成！")
+        print(f"   最终测试集F1：{f1} | P：{p} | R：{r}")
         return test_metrics
+    
     except Exception as e:
-        print(f"\n❌ 运行失败：{e}")
+        print(f"\n❌ 数据集 {dfname} 运行失败：{str(e)}")
         import traceback
         traceback.print_exc()
         print(f"✅ 数据集 {dfname} 训练完成！最终测试集F1：N/A")
         return None
 
 def train_all_datasets(datasets: list, seed: int = 2026):
+    """批量训练多个数据集，返回汇总结果"""
     all_results = {}
     for dfname in datasets:
-        metrics = train_single_dataset(dfname, seed=seed)
-        all_results[dfname] = metrics
+        all_results[dfname] = train_single_dataset(dfname, seed=seed)
     
-    print(f"\n{'='*70}")
-    print("📊 所有数据集训练结果汇总")
-    print(f"{'='*70}")
-    print(f"{'数据集':10s} | P      | R      | F1     ")
+    # 汇总打印结果
+    print(f"\n{'='*70}\n📊 所有数据集训练结果汇总\n{'='*70}")
+    print(f"{'数据集':10s} | {'P':6s} | {'R':6s} | {'F1':6s}")
     print(f"{'-'*70}")
     for dfname, metrics in all_results.items():
         if metrics:
             print(f"{dfname:10s} | {metrics['avg_precision']:.4f} | {metrics['avg_recall']:.4f} | {metrics['avg_f1']:.4f}")
         else:
-            print(f"{dfname:10s} | 训练失败")
+            print(f"{dfname:10s} | {'失败':6s} | {'失败':6s} | {'失败':6s}")
     
     return all_results
 
 if __name__ == "__main__":
-    # 可根据需要调整要训练的数据集列表，比如同时训练三个：["elliptic","elliptic2","ibm"]
+    # 可调整训练的数据集列表
     dataset_list = ["ibm"]
     final_results = train_all_datasets(dataset_list, seed=2026)

@@ -3,21 +3,22 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+
 class Expander:
     def __init__(
         self,
         graph,
         model,
-        maxLen: int,  
+        maxLen: int,
         optimizer,
         device: Optional[torch.device] = None,
         # 基础RL参数
         gamma: float = 0.99,
         # F1奖励核心参数（外部传入，方便调试）
-        f1_base_weight: float = 1.0,       # F1基础权重
-        p_bias: float = 0.2,               # 精度倾斜系数
-        min_f1_threshold: float = 0.1,     # 最小F1阈值
-        len_penalty_coeff: float = 0.95,   # 长度惩罚系数
+        f1_base_weight: float = 1.0,  # F1基础权重
+        p_bias: float = 0.2,  # 精度倾斜系数
+        min_f1_threshold: float = 0.1,  # 最小F1阈值
+        len_penalty_coeff: float = 0.95,  # 长度惩罚系数
     ):
         self.graph = graph
         self.model = model
@@ -25,7 +26,7 @@ class Expander:
         self.gamma = gamma
         self.maxLen = maxLen
         self.device = device or torch.device("cpu")
-        
+
         # 核心F1奖励参数
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
@@ -53,14 +54,20 @@ class Expander:
         for batch_logits in logits:
             if batch_logits is None or batch_logits.numel() == 0:
                 actions.append("Stp")
-                log_probs.append(torch.tensor(-1e9, device=self.device, requires_grad=True))
+                log_probs.append(
+                    torch.tensor(-1e9, device=self.device, requires_grad=True)
+                )
                 continue
-            
+
             # 统一logits维度
             if batch_logits.dim() > 1:
                 batch_logits = batch_logits.squeeze()
-                batch_logits = batch_logits.mean(dim=-1) if batch_logits.dim() > 1 else batch_logits
-            
+                batch_logits = (
+                    batch_logits.mean(dim=-1)
+                    if batch_logits.dim() > 1
+                    else batch_logits
+                )
+
             # 贪心选argmax
             try:
                 dist = torch.distributions.Categorical(logits=batch_logits)
@@ -70,14 +77,16 @@ class Expander:
                 log_probs_dist = F.log_softmax(batch_logits, dim=-1)
                 action = torch.argmax(log_probs_dist)
                 log_prob = log_probs_dist[action]
-            
+
             log_prob = log_prob.squeeze() if log_prob.dim() > 0 else log_prob
             log_prob.requires_grad_(True)
-            
-            action_item = int(action.item()) if isinstance(action, torch.Tensor) else action
+
+            action_item = (
+                int(action.item()) if isinstance(action, torch.Tensor) else action
+            )
             actions.append(action_item if action_item != "Stp" else "Stp")
             log_probs.append(log_prob)
-        
+
         return actions, log_probs
 
     def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
@@ -89,13 +98,25 @@ class Expander:
             unique_neigh = list(set(neigh) - set(tra))
             choices.append(unique_neigh)
             neigh_embed = self.graph.nodesEmbed(unique_neigh)
-            
+
             if not isinstance(neigh_embed, torch.Tensor):
                 if isinstance(neigh_embed, list) and len(neigh_embed) == 0:
-                    neigh_embed = torch.empty(0, tra_vector[i].size(-1), dtype=torch.float32, device=self.device)
+                    neigh_embed = torch.empty(
+                        0,
+                        tra_vector[i].size(-1),
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
                 else:
-                    neigh_embed = torch.tensor(np.stack(neigh_embed) if isinstance(neigh_embed, list) else neigh_embed, 
-                                               dtype=torch.float32, device=self.device)
+                    neigh_embed = torch.tensor(
+                        (
+                            np.stack(neigh_embed)
+                            if isinstance(neigh_embed, list)
+                            else neigh_embed
+                        ),
+                        dtype=torch.float32,
+                        device=self.device,
+                    )
             else:
                 neigh_embed = neigh_embed.to(self.device)
             if self.model.training:
@@ -103,22 +124,36 @@ class Expander:
 
             t_tra_vector.extend([neigh_embed, tra_vector[i].unsqueeze(0)])
             t_seed_vector.extend([neigh_embed, seed_vector[i].unsqueeze(0)])
-            indptr.append((offset, offset + 1 + len(unique_neigh), offset + len(unique_neigh)))
+            indptr.append(
+                (offset, offset + 1 + len(unique_neigh), offset + len(unique_neigh))
+            )
             offset += len(unique_neigh) + 1
 
-        return torch.cat(t_seed_vector, dim=0), torch.cat(t_tra_vector, dim=0), np.array(indptr), choices
+        return (
+            torch.cat(t_seed_vector, dim=0),
+            torch.cat(t_tra_vector, dim=0),
+            np.array(indptr),
+            choices,
+        )
 
     def add_node(self, new_node, tra_nodes, index):
         """添加节点到轨迹，更新done状态"""
         if len(self.done) <= index:
             self.done.extend([False] * (index + 1 - len(self.done)))
-        if (new_node in (None, "Stp", -1) or len(tra_nodes[index]) >= self.maxLen or 
-            (new_node != "Stp" and new_node in tra_nodes[index])):
+        if (
+            new_node in (None, "Stp", -1)
+            or len(tra_nodes[index]) >= self.maxLen
+            or (new_node != "Stp" and new_node in tra_nodes[index])
+        ):
             self.done[index] = True
             return None
         tra_nodes[index].append(new_node)
         embed = self.graph.singleNodeEmbed(new_node)
-        embed = torch.tensor(embed, dtype=torch.float32, device=self.device) if not isinstance(embed, torch.Tensor) else embed.to(self.device)
+        embed = (
+            torch.tensor(embed, dtype=torch.float32, device=self.device)
+            if not isinstance(embed, torch.Tensor)
+            else embed.to(self.device)
+        )
         if self.model.training:
             embed.requires_grad_(True)
         return embed
@@ -134,12 +169,23 @@ class Expander:
     def sample_bs_trajectories(self, seeds):
         """批量采样轨迹"""
         seed_vector = self.graph.nodesEmbed(seeds)
-        seed_vector = torch.tensor(np.stack(seed_vector) if isinstance(seed_vector, list) else seed_vector, 
-                                   dtype=torch.float32, device=self.device) if not isinstance(seed_vector, torch.Tensor) else seed_vector.to(self.device)
+        seed_vector = (
+            torch.tensor(
+                np.stack(seed_vector) if isinstance(seed_vector, list) else seed_vector,
+                dtype=torch.float32,
+                device=self.device,
+            )
+            if not isinstance(seed_vector, torch.Tensor)
+            else seed_vector.to(self.device)
+        )
         if self.model.training:
             seed_vector.requires_grad_(True)
 
-        tra_vector, tra_nodes, tra_logps = seed_vector.clone(), [[s] for s in seeds], [[] for _ in range(len(seeds))]
+        tra_vector, tra_nodes, tra_logps = (
+            seed_vector.clone(),
+            [[s] for s in seeds],
+            [[] for _ in range(len(seeds))],
+        )
         self.done = [False] * len(seeds)
         step = 0
 
@@ -151,7 +197,9 @@ class Expander:
             active_tra_vector = [tra_vector[i] for i in active_indices]
             active_seed_vector = [seed_vector[i] for i in active_indices]
 
-            *model_inputs, batch_candidates = self.prepare_inputs(active_tra_vector, active_seed_vector, active_tra_nodes)
+            *model_inputs, batch_candidates = self.prepare_inputs(
+                active_tra_vector, active_seed_vector, active_tra_nodes
+            )
             batch_logits = self.model(*model_inputs)
             actions, logps = self.sample_actions(batch_logits)
 
@@ -168,7 +216,9 @@ class Expander:
                         continue
                     newvec = self.add_node(selected_node, tra_nodes, orig_idx)
                     if newvec is not None:
-                        tra_vector[orig_idx] = self.vecpool(tra_vector[orig_idx], newvec, len(tra_nodes[orig_idx]))
+                        tra_vector[orig_idx] = self.vecpool(
+                            tra_vector[orig_idx], newvec, len(tra_nodes[orig_idx])
+                        )
                         tra_logps[orig_idx].append(logp)
             step += 1
         return tra_nodes, tra_logps
@@ -176,7 +226,7 @@ class Expander:
     def trainReward(self, seeds: List[int], true_coms):
         """核心训练逻辑：修复执行顺序+验证梯度流向"""
         self.model.train()
-        self.optimizer.zero_grad(set_to_none=True)
+     
         selected_nodes, logps = self.sample_bs_trajectories(seeds)
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
@@ -188,13 +238,15 @@ class Expander:
             pred_com_clean = [n for n in pred_com if n != "Stp"]
             p, r, f1 = self.eval_scores(pred_com_clean, true_com)
             p_list.append(p), r_list.append(r), f1_list.append(f1)
-        
+
         avg_metrics = {
-            "avg_precision": round(np.mean(p_list),4), 
-            "avg_recall": round(np.mean(r_list),4), 
-            "avg_f1": round(np.mean(f1_list),4)
+            "avg_precision": round(np.mean(p_list), 4),
+            "avg_recall": round(np.mean(r_list), 4),
+            "avg_f1": round(np.mean(f1_list), 4),
         }
-        print(f"Batch Metrics: P={avg_metrics['avg_precision']}, R={avg_metrics['avg_recall']}, F1={avg_metrics['avg_f1']}")
+        print(
+            f"Batch Metrics: P={avg_metrics['avg_precision']}, R={avg_metrics['avg_recall']}, F1={avg_metrics['avg_f1']}"
+        )
 
         # 2. F1奖励计算（转torch张量，保留数值）
         rewards_list = []
@@ -204,9 +256,9 @@ class Expander:
             true_com_len = len(true_com_set)
 
             for node in com[1:]:
-                if node == 'Stp' or node in temp_com:
+                if node == "Stp" or node in temp_com:
                     continue
-                
+
                 # 计算选节点前后的F1（转torch张量）
                 pre_f1 = self.eval_f1(temp_com, true_com_set)
                 temp_com.append(node)
@@ -226,7 +278,9 @@ class Expander:
 
                 curr_pred_len = len(temp_com)
                 if curr_pred_len > true_com_len:
-                    base_reward *= (self.len_penalty_coeff ** (curr_pred_len - true_com_len))
+                    base_reward *= self.len_penalty_coeff ** (
+                        curr_pred_len - true_com_len
+                    )
 
                 base_reward = np.clip(base_reward, 0.0, self.f1_base_weight)
                 step_rewards.append(base_reward)
@@ -241,70 +295,69 @@ class Expander:
             rewards_list.append(discounted if discounted else [0.0])
 
         # 3. 奖励填充（转torch张量）
-        max_len = max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps)) if (rewards_list and logps) else 0
+        max_len = (
+            max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps))
+            if (rewards_list and logps)
+            else 0
+        )
         rewards_padded = np.zeros((bs, max_len))
         for i, r in enumerate(rewards_list):
-            rewards_padded[i, :len(r)] = r
+            rewards_padded[i, : len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
         # 4. logps填充（和你原逻辑一致）
         logps_padded = []
         for lp_list in logps:
             padded = [
-                lp_list[j] if j < len(lp_list) and lp_list[j] is not None 
-                else torch.tensor(-1e9, device=self.device, requires_grad=True) 
+                (
+                    lp_list[j]
+                    if j < len(lp_list) and lp_list[j] is not None
+                    else torch.tensor(-1e9, device=self.device, requires_grad=True)
+                )
                 for j in range(max_len)
             ]
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
         # 5. Mask计算
-        mask = (torch.arange(max_len, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
+        mask = (
+            torch.arange(max_len, device=self.device).expand(bs, -1)
+            < (lengths - 1).unsqueeze(1)
+        ).float()
 
         # ==================== 验证梯度流向的核心代码 ====================
-        # 版本1：不detach reward，打印梯度链
-        loss_no_detach = -(rewards * logps * mask).sum()   # 缩小loss规模
-        print("\n=== 不detach reward的梯度流向 ===")
-        print(f"loss.grad_fn: {loss_no_detach.grad_fn.__class__.__name__}")
-        # 追根溯源梯度链
-        grad_chain = []
-        current_fn = loss_no_detach.grad_fn
-        while current_fn is not None:
-            grad_chain.append(current_fn.__class__.__name__)
-            if hasattr(current_fn, 'next_functions') and current_fn.next_functions:
-                current_fn = current_fn.next_functions[0][0]
-            else:
-                break
-        print(f"梯度链: {' → '.join(grad_chain)}")
 
-        # 版本2：detach reward，打印梯度链
         rewards_detach = rewards.detach()
-        loss_detach = -(rewards_detach * logps * mask).sum() * 0.01
-        print("\n=== detach reward后的梯度流向 ===")
-        print(f"loss.grad_fn: {loss_detach.grad_fn.__class__.__name__}")
-        grad_chain_detach = []
-        current_fn = loss_detach.grad_fn
-        while current_fn is not None:
-            grad_chain_detach.append(current_fn.__class__.__name__)
-            if hasattr(current_fn, 'next_functions') and current_fn.next_functions:
-                current_fn = current_fn.next_functions[0][0]
-            else:
-                break
-        print(f"梯度链: {' → '.join(grad_chain_detach)}")
+        self.optimizer.zero_grad(set_to_none=True)
+        loss = -(rewards_detach * logps * mask).sum()*0.01
 
-        # ==================== 正式训练（用detach后的loss） ====================
-        loss = loss_detach  # 用detach后的loss训练
-        # 正确的梯度计算+裁剪+更新顺序
-        loss.backward()  # 第一步：计算梯度
-        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)  # 第二步：裁剪梯度
+        loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=1.0
+        )  # 第二步：裁剪梯度
         self.optimizer.step()  # 第三步：更新参数
 
         # 打印关键指标（验证裁剪生效）
-        param_mean = torch.mean(torch.stack([p.data.mean() for p in self.model.parameters() if p.requires_grad]))
-        grad_mean = torch.mean(torch.stack([
-            p.grad.mean() if p.grad is not None else torch.tensor(0., device=self.device) 
-            for p in self.model.parameters() if p.requires_grad
-        ]))
-        print(f"\nGrad Check | Total Grad Norm: {grad_norm:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}")
+        param_mean = torch.mean(
+            torch.stack(
+                [p.data.mean() for p in self.model.parameters() if p.requires_grad]
+            )
+        )
+        grad_mean = torch.mean(
+            torch.stack(
+                [
+                    (
+                        p.grad.mean()
+                        if p.grad is not None
+                        else torch.tensor(0.0, device=self.device)
+                    )
+                    for p in self.model.parameters()
+                    if p.requires_grad
+                ]
+            )
+        )
+        print(
+            f"\nGrad Check | Total Grad Norm: {grad_norm:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}"
+        )
         print(f"loss: {loss.item():.4f}")
         return loss.item()
