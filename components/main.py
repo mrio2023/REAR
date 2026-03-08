@@ -8,6 +8,52 @@ current_file = os.path.abspath(__file__)
 sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
 os.chdir(sci_dir)
 
+
+# # ===================== 基础RL参数 =====================
+# # gamma（折扣因子）
+# # 公式：G_t = r_t + γ*r_{t+1} + γ²*r_{t+2} + ... + γ^(T-t-1)*r_{T-1}
+# # 代码位置：Expander.__init__ / trainReward折扣奖励计算
+# # 调节：γ↑（0.99）→ 重视长期奖励；γ↓（0.9）→ 只看近期
+# self.gamma = gamma  
+
+# # maxLen（最大轨迹长度）
+# # 公式：len(tra_nodes) ≤ maxLen
+# # 代码位置：Expander.__init__ / add_node长度判断
+# # 调节：maxLen↓→P↑R↓；maxLen↑→P↓R↑
+# self.maxLen = maxLen  
+
+# # ===================== F1奖励核心参数 =====================
+# # f1_base_weight（F1基础权重）
+# # 公式：base_reward = biased_f1 * w_base  或  base_reward = -(1-curr_f1)*w_base
+# # 代码位置：trainReward奖励计算
+# # 调节：w_base↑→奖励放大；w_base↓→奖励缩小
+# self.f1_base_weight = f1_base_weight  
+
+# # p_bias（精度倾斜系数）
+# # 公式：biased_f1 = curr_f1*(1+p_bias) （当curr_p < curr_r时）
+# #       biased_f1 = curr_f1            （当curr_p ≥ curr_r时）
+# # 代码位置：trainReward奖励计算
+# # 调节：p_bias↑→P↑R↓；p_bias↓→P↓R↑；p_bias<0→偏向Recall
+# self.p_bias = p_bias  
+
+# # min_f1_threshold（最小F1阈值）
+# # 公式：if curr_f1 > pre_f1 and curr_f1 > θ → 正奖励；else → 负奖励
+# # 代码位置：trainReward奖励判断
+# # 调节：θ↑→模型更挑剔（P↑R↓）；θ↓→模型更宽松（P↓R↑）
+# self.min_f1_threshold = min_f1_threshold  
+
+# # len_penalty_coeff（长度惩罚系数）
+# # 公式：base_reward *= α^(curr_len - true_len) （curr_len > true_len时）
+# # 代码位置：trainReward长度惩罚计算
+# # 调节：α↓（0.7）→ 惩罚重（P↑R↓）；α↑（0.99）→ 惩罚轻（P↓R↑）
+# self.len_penalty_coeff = len_penalty_coeff  
+
+# # ===================== 损失函数 =====================
+# # loss（策略梯度损失）
+# # 公式：loss = -Σ(rewards_detach * logps * mask)
+# # 代码位置：trainReward梯度计算
+# # 逻辑：奖励正→loss小；奖励负→loss大（模型追求正奖励）
+# loss = -(rewards_detach * logps * mask).sum()
 # 数据集参数配置表（结构化管理，所有参数集中在这里）
 DATASET_CONFIGS = {
     "ibm": {

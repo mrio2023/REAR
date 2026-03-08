@@ -76,7 +76,7 @@ class dataProcess():
     def print_progress(self, msg: str, step: int, total_steps: int = None, end: str = "\r"):
         """
         打印带进度条的提示信息
-        :param msg: 提示文本
+        :param msg: 提示文本Q
         :param step: 当前步骤
         :param total_steps: 总步骤数（默认用self.total_steps）
         :param end: 换行符（\r=覆盖当前行，\n=换行）
