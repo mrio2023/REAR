@@ -91,9 +91,6 @@ class Expander:
                 community_pooled_embed=tra_vector[i],
                 neigh_node_embed_list=neigh_embed,
                 neigh_nodes=unique_neigh,
-                top_k_max=50,
-                top_p_ratio=0.1,
-                min_neigh_threshold=30,
             )
 
             idx_map = {node: j for j, node in enumerate(unique_neigh)}

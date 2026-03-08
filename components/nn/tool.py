@@ -23,7 +23,7 @@ def pruning(
     neigh_nodes: List[str],
     top_k_max: int = 50,  # 最大保留50个
     top_p_ratio: float = 0.1,  # 最大保留10%
-    min_neigh_threshold: int = 30,  # 邻居数≤30时不剪枝
+    min_neigh_threshold: int = 40,  # 邻居数≤30时不剪枝
 ) -> List[str]:
     """
     【静态函数】基于余弦相似度剪枝：
@@ -64,10 +64,10 @@ def pruning(
     # ========== 2. 核心规则：邻居数≤30时直接返回全部（不剪枝） ==========
     num_neigh = len(neigh_nodes)
     if num_neigh == 0:
-        print("⚠️  无邻居节点，返回空列表")
+        # print("⚠️  无邻居节点，返回空列表")
         return []
     if num_neigh <= min_neigh_threshold:
-        print(f"ℹ️  邻居数={num_neigh} ≤ {min_neigh_threshold}，不剪枝")
+        # print(f"ℹ️  邻居数={num_neigh} ≤ {min_neigh_threshold}，不剪枝")
         return neigh_nodes
 
     # ========== 3. 邻居数>30时，计算剪枝数量（10%或50取更小） ==========
@@ -135,19 +135,3 @@ def eval_f1(
     return 2 * p * r / (p + r)
 
 
-# ------------------- 测试用例（可选） -------------------
-if __name__ == "__main__":
-    # 测试pruning函数
-    pooled_embed = np.random.rand(128)
-    neigh_embeds = np.random.rand(100, 128)
-    neigh_nodes = [f"node_{i}" for i in range(100)]
-    pruned_nodes = pruning(pooled_embed, neigh_embeds, neigh_nodes)
-    print(f"剪枝后节点数：{len(pruned_nodes)}")  # 预期输出10（10%）
-    
-    # 测试eval_scores和eval_f1
-    pred = [1,2,3,4]
-    true = [3,4,5,6]
-    p, r, f1 = eval_scores(pred, true)
-    f1_single = eval_f1(pred, true)
-    print(f"P={p}, R={r}, F1={f1}")  # P=0.5, R=0.5, F1=0.5
-    print(f"单独计算F1：{f1_single}")   # 0.5
