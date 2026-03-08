@@ -2,6 +2,7 @@ from typing import Union, Optional, List, Set
 import numpy as np
 import torch
 import torch.nn.functional as F
+from .tool import eval_f1, eval_scores, pruning
 
 
 class Expander:
@@ -33,21 +34,6 @@ class Expander:
         self.min_f1_threshold = min_f1_threshold
         self.len_penalty_coeff = len_penalty_coeff
 
-    def eval_scores(self, pred_comm: Union[List, Set], true_comm: Union[List, Set]):
-        """计算P/R/F1（核心评估指标）"""
-        intersect = set(true_comm) & set(pred_comm)
-        p = len(intersect) / len(pred_comm) if pred_comm else 0.0
-        r = len(intersect) / len(true_comm) if true_comm else 0.0
-        f1 = 2 * p * r / (p + r + 1e-9)
-        return round(p, 4), round(r, 4), round(f1, 4)
-
-    def eval_f1(self, pred_comm: Union[List, Set], true_comm: Union[List, Set]):
-        """单独计算F1（奖励核心）"""
-        intersect = set(true_comm) & set(pred_comm)
-        p = len(intersect) / len(pred_comm) if pred_comm else 0.0
-        r = len(intersect) / len(true_comm) if true_comm else 0.0
-        return 2 * p * r / (p + r + 1e-9) if (p + r) > 0 else 0.0
-
     def sample_actions(self, logits):
         """贪心选择概率最高的动作"""
         actions, log_probs = [], []
@@ -67,7 +53,9 @@ class Expander:
             log_prob = log_prob.squeeze() if log_prob.dim() > 0 else log_prob
             log_prob.requires_grad_(True)
 
-            action_item = int(action.item()) if isinstance(action, torch.Tensor) else action
+            action_item = (
+                int(action.item()) if isinstance(action, torch.Tensor) else action
+            )
             actions.append(action_item if action_item != "Stp" else "Stp")
             log_probs.append(log_prob)
 
@@ -78,36 +66,54 @@ class Expander:
         t_tra_vector, t_seed_vector, indptr, choices = [], [], [], []
         offset = 0
         # 获取嵌入维度（从第一个有效节点的嵌入中提取）
-        embed_dim = tra_vector[0].shape[-1] if tra_vector else 64  # 兜底维度，可根据实际调整
-        
+        embed_dim = self.graph.embedsize
+
         for i, tra in enumerate(tra_nodes):
             neigh = self.graph.getNodesNeigh(tra)
-            unique_neigh = list(set(neigh) - set(tra))  
+            unique_neigh = list(set(neigh) - set(tra))
 
-            # ========== 核心修改：空邻居处理逻辑 ==========
             if len(unique_neigh) <= 0:
-                # 1. 填充假嵌入（全0张量，维度和正常嵌入一致）
-                fake_embed = torch.zeros((1, embed_dim), dtype=torch.float32, device=self.device)
+                fake_embed = torch.zeros(
+                    (1, embed_dim), dtype=torch.float32, device=self.device
+                )
                 t_tra_vector.append(fake_embed)
                 t_seed_vector.append(fake_embed)
-                # 添加当前节点的真实嵌入（保证offset递增逻辑一致）
                 t_tra_vector.append(tra_vector[i].unsqueeze(0))
                 t_seed_vector.append(seed_vector[i].unsqueeze(0))
-                
-                # 2. 标记choices为Stp，indptr正常记录偏移（保证长度一致）
-                choices.append("Stp")
-                indptr.append((offset, offset + 2, offset + 1))  # 假邻居+当前节点，共2个元素
-                offset += 2  # 偏移量同步增加
-                continue
-            # ========== 空邻居处理结束 ==========
 
-            # 非空邻居的正常逻辑
-            choices.append(unique_neigh)
+                choices.append("Stp")
+                indptr.append((offset, offset + 2, offset + 1))
+                offset += 2
+
             neigh_embed = self.graph.nodesEmbed(unique_neigh)
 
+            pruned_nodes = pruning(
+                community_pooled_embed=tra_vector[i],
+                neigh_node_embed_list=neigh_embed,
+                neigh_nodes=unique_neigh,
+                top_k_max=50,
+                top_p_ratio=0.1,
+                min_neigh_threshold=30,
+            )
+
+            idx_map = {node: j for j, node in enumerate(unique_neigh)}
+            keep_idx = [idx_map[n] for n in pruned_nodes]
+
+            if isinstance(neigh_embed, list):
+                neigh_embed = [neigh_embed[j] for j in keep_idx]
+            else:
+                neigh_embed = neigh_embed[keep_idx]
+
+            unique_neigh = pruned_nodes
+
+            choices.append(unique_neigh)
             if not isinstance(neigh_embed, torch.Tensor):
                 neigh_embed = torch.tensor(
-                    np.stack(neigh_embed) if isinstance(neigh_embed, list) else neigh_embed,
+                    (
+                        np.stack(neigh_embed)
+                        if isinstance(neigh_embed, list)
+                        else neigh_embed
+                    ),
                     dtype=torch.float32,
                     device=self.device,
                 )
@@ -129,9 +135,9 @@ class Expander:
             # 3. 添加当前节点的嵌入
             t_tra_vector.append(tra_vector[i].unsqueeze(0))
             t_seed_vector.append(seed_vector[i].unsqueeze(0))
-        
+
             afterLen = len(t_tra_vector)
-            increase = afterLen - beforeLen  
+            increase = afterLen - beforeLen
             target_increase = len(unique_neigh) + 1
 
             if increase != target_increase:
@@ -152,8 +158,12 @@ class Expander:
 
         # 边界处理：如果所有节点都是空邻居，返回空张量（保持维度一致）
         if not t_seed_vector or not t_tra_vector:
-            seed_embed = torch.empty((0, embed_dim), dtype=torch.float32, device=self.device)
-            tra_embed = torch.empty((0, embed_dim), dtype=torch.float32, device=self.device)
+            seed_embed = torch.empty(
+                (0, embed_dim), dtype=torch.float32, device=self.device
+            )
+            tra_embed = torch.empty(
+                (0, embed_dim), dtype=torch.float32, device=self.device
+            )
         else:
             seed_embed = torch.cat(t_seed_vector, dim=0)
             tra_embed = torch.cat(t_tra_vector, dim=0)
@@ -259,7 +269,7 @@ class Expander:
     def trainReward(self, seeds: List[int], true_coms):
         """核心训练逻辑：修复执行顺序+验证梯度流向"""
         self.model.train()
-     
+
         selected_nodes, logps = self.sample_bs_trajectories(seeds)
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
@@ -269,7 +279,7 @@ class Expander:
         p_list, r_list, f1_list = [], [], []
         for pred_com, true_com in zip(selected_nodes, true_coms):
             pred_com_clean = [n for n in pred_com if n != "Stp"]
-            p, r, f1 = self.eval_scores(pred_com_clean, true_com)
+            p, r, f1 = eval_scores(pred_com_clean, true_com)
             p_list.append(p), r_list.append(r), f1_list.append(f1)
 
         avg_metrics = {
@@ -293,10 +303,10 @@ class Expander:
                     continue
 
                 # 计算选节点前后的F1（转torch张量）
-                pre_f1 = self.eval_f1(temp_com, true_com_set)
+                pre_f1 = eval_f1(temp_com, true_com_set)
                 temp_com.append(node)
-                curr_f1 = self.eval_f1(temp_com, true_com_set)
-                curr_p, curr_r, _ = self.eval_scores(temp_com, true_com_set)
+                curr_f1 = eval_f1(temp_com, true_com_set)
+                curr_p, curr_r, _ = eval_scores(temp_com, true_com_set)
 
                 # 精度倾斜+增量奖励+长度惩罚
                 if curr_p < curr_r:

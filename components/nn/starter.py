@@ -9,6 +9,7 @@ from .dataProcess import dataProcess
 from .graph import Graph
 from .Agent import Agent
 from .expander import Expander
+from .tool import eval_scores, eval_f1
 
 
 class Starter:
@@ -18,18 +19,6 @@ class Starter:
         :param params: 包含所有配置的字典，key为参数名，value为参数值
         """
         self.params = params  # 仅保存字典引用，不拆解为实例属性
-
-    def set_seed(self, seed: int):
-        """固定所有随机种子"""
-        random.seed(seed)
-        np.random.seed(seed)
-        torch.manual_seed(seed)
-        torch.cuda.manual_seed(seed)
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-        os.environ["PYTHONHASHSEED"] = str(seed)
-        print(f"✅ 所有随机种子已固定为：{seed}")
 
     def eval_model(self, expander: Expander, test_g: Graph) -> Dict:
         """批量加速版模型评估，直接从self.params取参数"""
@@ -41,14 +30,15 @@ class Starter:
             if isinstance(addr_set, (set, list)) and len(addr_set) > 0
         ]
 
-        # 1. 种子采样（直接从字典取maxTraLen）
-        start_sample = time.time()
         test_seeds = {}
         for name_tag, addr_list in true_coms:
             # 直接用self.params['maxTraLen']，无本地属性
-            sample_num = min(int(1 + len(addr_list) / self.params.get('maxTraLen', 50)), len(addr_list))
+            sample_num = min(
+                int(1 + len(addr_list) / self.params.get("maxTraLen", 50)),
+                len(addr_list),
+            )
             test_seeds[name_tag] = random.sample(addr_list, k=sample_num)
-        print(f"\n⏱️  测试种子采样耗时：{time.time()-start_sample:.2f} 秒")
+
         print(
             f"🔧 测试：真实社区 {len(true_coms)}，总种子 {sum(len(v) for v in test_seeds.values())}"
         )
@@ -61,7 +51,6 @@ class Starter:
         for name_tag, seeds in test_seeds.items():
             all_seeds_flat.extend(seeds)
             community_map.extend([name_tag] * len(seeds))
-        print(f"⏱️  测试批量种子整理耗时：{time.time()-start_batch:.2f} 秒")
 
         # 3. 批量推理
         pred_coms_flat = []
@@ -70,7 +59,7 @@ class Starter:
             with torch.no_grad():
                 pred_coms_flat, _ = expander.sample_bs_trajectories(all_seeds_flat)
             infer_time = time.time() - start_infer
-            print(f"⏱️  测试批量推理耗时（核心）：{infer_time:.2f} 秒")
+
             print(
                 f"   推理种子数：{len(all_seeds_flat)}，单种子平均耗时：{infer_time/len(all_seeds_flat):.4f} 秒/种子"
             )
@@ -81,7 +70,6 @@ class Starter:
         for idx, pred_com in enumerate(pred_coms_flat):
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred[community_map[idx]].update(valid_nodes)
-        print(f"⏱️  测试结果整理耗时：{time.time()-start_result:.2f} 秒")
 
         # 5. 计算指标
         start_metric = time.time()
@@ -89,11 +77,10 @@ class Starter:
         for name_tag, true_addr in true_coms:
             if name_tag not in community_pred:
                 continue
-            p, r, f1 = expander.eval_scores(list(community_pred[name_tag]), true_addr)
+            p, r, f1 = eval_scores(list(community_pred[name_tag]), true_addr)
             metrics["precision"].append(p)
             metrics["recall"].append(r)
             metrics["f1"].append(f1)
-        print(f"⏱️  测试指标计算耗时：{time.time()-start_metric:.2f} 秒")
 
         # 汇总指标
         avg_metrics = {
@@ -104,7 +91,7 @@ class Starter:
         }
 
         # 打印结果
-        print(f"\n⏱️  测试阶段总耗时：{time.time()-start_sample:.2f} 秒")
+
         print("\n" + "=" * 60)
         print("📊 测试结果（批量加速版）")
         print("=" * 60)
@@ -116,7 +103,6 @@ class Starter:
         return avg_metrics
 
     def run(self, dfname, seed) -> Dict:
-        self.set_seed(seed)
 
         try:
             # 打印基础信息（直接从字典取参数）
@@ -148,16 +134,22 @@ class Starter:
             )
 
             # 3. 初始化模型和扩展器：全程透传字典参数
-            device = torch.device(self.params.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
+            device = torch.device(
+                self.params.get(
+                    "device", "cuda" if torch.cuda.is_available() else "cpu"
+                )
+            )
             model = Agent(
                 input_size=train_g.embedsize,
-                hidden_size=self.params.get("hidden_size", 128)  # 从字典取hidden_size
+                hidden_size=self.params.get("hidden_size", 128),  # 从字典取hidden_size
             ).to(device)
-            
+
             expander = Expander(
                 graph=train_g,
                 model=model,
-                optimizer=torch.optim.Adam(model.parameters(), lr=self.params.get("lr", 1e-4)),
+                optimizer=torch.optim.Adam(
+                    model.parameters(), lr=self.params.get("lr", 1e-4)
+                ),
                 device=device,
                 maxLen=self.params.get("maxLen", 20),
                 gamma=self.params.get("gamma", 0.9),
@@ -180,7 +172,7 @@ class Starter:
 
             # 5. 测试模型：透传参数
             print(f"\n{'='*70}\n🧪 开始测试（真实社区+动态采样种子）\n{'='*70}")
-          
+
             test_g = Graph(
                 dfnode=dp.test_nodes,
                 dffeature=dp.test_feature,
@@ -201,5 +193,6 @@ class Starter:
         except Exception as e:
             print(f"\n❌ 运行失败：{str(e)}")
             import traceback
+
             traceback.print_exc()
             return None

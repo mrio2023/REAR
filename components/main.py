@@ -1,7 +1,7 @@
 import torch
 import os
 from nn.starter import Starter  # 注意：这里的Starter要使用之前纯字典透传的版本
-
+from nn.tool import set_seed
 # 设置工作目录（精简路径计算逻辑）
 current_file = os.path.abspath(__file__)
 sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
@@ -79,7 +79,9 @@ DATASET_CONFIGS = {
 def train_single_dataset(dfname: str, seed: int = 2026):
     """训练单个数据集，返回测试指标（纯字典传参）"""
     print(f"\n{'='*70}\n🚀 开始训练数据集：{dfname} (种子={seed})\n{'='*70}")
-    
+    set_seed(seed=seed)
+
+    print("种子是",seed)
     # 检查配置是否存在
     if dfname not in DATASET_CONFIGS:
         print(f"❌ 数据集 {dfname} 无配置参数，终止训练")
