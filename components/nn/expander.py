@@ -12,15 +12,18 @@ class Expander:
         model,
         maxLen: int,
         optimizer,
-        device: Optional[torch.device] = None,
+        device: Optional[torch.device],
         # 基础RL参数
-        gamma: float = 0.99,
+        gamma: float,
         # F1奖励核心参数（外部传入，方便调试）
-        f1_base_weight: float = 1.0,  # F1基础权重
-        p_bias: float = 0.2,  # 精度倾斜系数
-        min_f1_threshold: float = 0.1,  # 最小F1阈值
-        len_penalty_coeff: float = 0,  # 长度惩罚系数
+        f1_base_weight: float,  # F1基础权重
+        p_bias: float,  # 精度倾斜系数
+        len_penalty_coeff: float,  # 长度惩罚系数
+        min_f1_threshold: float,  # 最小F1阈值
+        r_bias: float = 1,  # 召回倾斜系数（新增）
+        repeat_penalty_coeff: float = 0.5,  # 重复选点惩罚系数（新增）
     ):
+        
         self.graph = graph
         self.model = model
         self.optimizer = optimizer
@@ -31,21 +34,25 @@ class Expander:
         # 核心F1奖励参数
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
+        self.r_bias = r_bias  # 新增：召回偏向系数
         self.min_f1_threshold = min_f1_threshold
         self.len_penalty_coeff = len_penalty_coeff
-
+        self.repeat_penalty_coeff = repeat_penalty_coeff  # 新增：重复惩罚系数
+        print("self.r_bias",r_bias)
+        print("maxlen:",maxLen)
     def sample_actions(self, logits):
-        """贪心选择概率最高的动作"""
+        """贪心选择概率最高的动作 + 统计停止概率"""
         actions, log_probs = [], []
+        stop_count = 0  # 统计停止次数
+        # total_count = len(logits)  # 总选点次数
+
         for batch_logits in logits:
             if batch_logits is None or batch_logits.numel() == 0:
                 actions.append("Stp")
-                log_probs.append(
-                    torch.tensor(-1e9, device=self.device, requires_grad=True)
-                )
+                log_probs.append(torch.tensor(-1e9, device=self.device, requires_grad=True))
+                # stop_count += 1
                 continue
 
-            # 贪心选argmax
             dist = torch.distributions.Categorical(logits=batch_logits)
             action = torch.argmax(dist.probs)
             log_prob = dist.log_prob(action)
@@ -53,12 +60,17 @@ class Expander:
             log_prob = log_prob.squeeze() if log_prob.dim() > 0 else log_prob
             log_prob.requires_grad_(True)
 
-            action_item = (
-                int(action.item()) if isinstance(action, torch.Tensor) else action
-            )
-            actions.append(action_item if action_item != "Stp" else "Stp")
+            action_item = int(action.item()) if isinstance(action, torch.Tensor) else action
+            if action_item == "Stp" or action_item >= len(dist.probs):
+                actions.append("Stp")
+                stop_count += 1
+            else:
+                actions.append(action_item)
             log_probs.append(log_prob)
 
+        # # 计算并打印停止概率
+        # stop_prob = stop_count / total_count if total_count > 0 else 0.0
+        # print(f"提前停止概率: {stop_prob:.4f}")  # 比如0.2 → 20%概率停止
         return actions, log_probs
 
     def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
@@ -102,7 +114,7 @@ class Expander:
                 neigh_embed = neigh_embed[keep_idx]
 
             unique_neigh = pruned_nodes
-
+            # print(len(unique_neigh))
             choices.append(unique_neigh)
             if not isinstance(neigh_embed, torch.Tensor):
                 neigh_embed = torch.tensor(
@@ -230,16 +242,10 @@ class Expander:
             active_tra_vector = [tra_vector[i] for i in active_indices]
             active_seed_vector = [seed_vector[i] for i in active_indices]
 
-            # ========== 核心简化：直接取当前节点的邻居，无多余逻辑 ==========
-            walk_active_tra_nodes = []
-            for tra in active_tra_nodes:
-                cur_node = tra[-1]  # 当前节点（轨迹最后一个）
-                # 直接取当前节点的邻居（你要的核心逻辑）
-                neighbors = self.graph.getSingleNodeNeighbor(cur_node)
-                # 轨迹不变，后续prepare_inputs会基于此轨迹+cur_node邻居生成候选
-                walk_active_tra_nodes.append(tra)
-
-            # ========== 原有RL选点逻辑完全保留 ==========
+      
+            walk_active_tra_nodes = active_tra_nodes.copy()  
+        
+       
             *model_inputs, batch_candidates = self.prepare_inputs(
                 active_tra_vector, active_seed_vector, walk_active_tra_nodes
             )
@@ -271,76 +277,74 @@ class Expander:
         return tra_nodes, tra_logps
 
     def trainReward(self, seeds: List[int], true_coms):
-        """核心训练逻辑：修复损失函数逻辑，让F1越小loss越大"""
+        """核心训练逻辑：基于batch全局指标调整最终loss（参数仅作用于batch级）"""
         self.model.train()
 
         selected_nodes, logps = self.sample_bs_trajectories(seeds)
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
 
-        # 1. 计算P/R/F1指标（仅打印）
-        avg_metrics = {}
         p_list, r_list, f1_list = [], [], []
+        pred_len_list = []
+        early_stop_count = 0  # 新增：统计提前终止的样本数
+        max_len = self.maxLen  # 取预设的最大扩展长度
         for pred_com, true_com in zip(selected_nodes, true_coms):
             pred_com_clean = [n for n in pred_com if n != "Stp"]
             p, r, f1 = eval_scores(pred_com_clean, true_com)
-            p_list.append(p), r_list.append(r), f1_list.append(f1)
+            p_list.append(p)
+            r_list.append(r)
+            f1_list.append(f1)
+            pred_len_list.append(len(pred_com_clean))
+            
+            # 新增：判断是否提前终止（长度<maxLen 且 包含Stp）
+            has_stp = "Stp" in pred_com
+            is_early_stop = len(pred_com_clean) < max_len and has_stp
+            if is_early_stop:
+                early_stop_count += 1
 
-        avg_metrics = {
-            "avg_precision": round(np.mean(p_list), 4),
-            "avg_recall": round(np.mean(r_list), 4),
-            "avg_f1": round(np.mean(f1_list), 4),
-        }
-        print(
-            f"Batch Metrics: P={avg_metrics['avg_precision']}, R={avg_metrics['avg_recall']}, F1={avg_metrics['avg_f1']}"
-        )
+        batch_recall = np.mean(r_list)
+        batch_precision = np.mean(p_list)
+        batch_f1 = np.mean(f1_list)
+        avg_ext_len = np.mean(pred_len_list)
+        early_stop_prob = early_stop_count / bs if bs > 0 else 0.0  # 提前终止概率
 
-        # 2. F1奖励计算（修复核心：增加基础惩罚，让F1越小奖励越低）
+        # 打印新增提前终止概率
+        print(f"Batch Metrics: P={batch_precision:.4f}, R={batch_recall:.4f}, F1={batch_f1:.4f}, AvgExtLen={avg_ext_len:.2f}, EarlyStopProb={early_stop_prob:.4f}")
+
         rewards_list = []
         for idx, (com, true_com) in enumerate(zip(selected_nodes, true_coms)):
             temp_com, step_rewards = [com[0]], []
             true_com_set = set(true_com)
             true_com_len = len(true_com_set)
+            repeat_count = 0
 
             for node in com[1:]:
-                if node == "Stp" or node in temp_com:
-                    # 无效动作：给负奖励（惩罚）
+                if node in temp_com and node != "Stp":
+                    repeat_count += 1
+                    repeat_penalty = -self.repeat_penalty_coeff * repeat_count
+                    step_rewards.append(repeat_penalty)
+                    continue
+
+                if node == "Stp":
                     step_rewards.append(-0.1)
                     continue
 
-                # 计算选节点前后的F1
                 pre_f1 = eval_f1(temp_com, true_com_set)
                 temp_com.append(node)
                 curr_f1 = eval_f1(temp_com, true_com_set)
-                curr_p, curr_r, _ = eval_scores(temp_com, true_com_set)
 
-                # 精度倾斜
-                if curr_p < curr_r:
-                    biased_f1 = curr_f1 * (1 + self.p_bias)
-                else:
-                    biased_f1 = curr_f1
-
-                # 修复核心逻辑：
-                # - F1提升且达标：正奖励
-                # - F1未提升/不达标：负奖励（F1越小，奖励越负）
                 if curr_f1 > pre_f1 and curr_f1 > self.min_f1_threshold:
-                    base_reward = biased_f1 * self.f1_base_weight
+                    base_reward = curr_f1 * self.f1_base_weight
                 else:
-                    # 未提升/不达标：奖励 = - (1 - curr_f1) → F1越小，奖励越负
                     base_reward = -(1 - curr_f1) * self.f1_base_weight
 
-                # 长度惩罚（保留）
                 curr_pred_len = len(temp_com)
                 if curr_pred_len > true_com_len:
-                    base_reward *= self.len_penalty_coeff ** (
-                        curr_pred_len - true_com_len
-                    )
+                    base_reward *= self.len_penalty_coeff ** (curr_pred_len - true_com_len)
 
-                # 限制奖励范围（避免极端值）
                 base_reward = np.clip(base_reward, -1.0, 1.0)
                 step_rewards.append(base_reward)
 
-            # 折扣奖励
             discounted = []
             if step_rewards:
                 cum = 0.0
@@ -351,70 +355,54 @@ class Expander:
                 discounted = [0.0]
             rewards_list.append(discounted)
 
-        # 3. 奖励填充（转torch张量）
-        max_len = (
-            max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps))
-            if (rewards_list and logps)
-            else 0
-        )
-        rewards_padded = np.zeros((bs, max_len))
+        max_len_pad = max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps)) if (rewards_list and logps) else 0
+        rewards_padded = np.zeros((bs, max_len_pad))
         for i, r in enumerate(rewards_list):
             rewards_padded[i, : len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
-        # 4. logps填充
         logps_padded = []
         for lp_list in logps:
             padded = [
-                (
-                    lp_list[j]
-                    if j < len(lp_list) and lp_list[j] is not None
-                    else torch.tensor(-1e9, device=self.device, requires_grad=True)
-                )
-                for j in range(max_len)
+                lp_list[j] if j < len(lp_list) and lp_list[j] is not None 
+                else torch.tensor(-1e9, device=self.device, requires_grad=True)
+                for j in range(max_len_pad)
             ]
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
-        # 5. Mask计算
-        mask = (
-            torch.arange(max_len, device=self.device).expand(bs, -1)
-            < (lengths - 1).unsqueeze(1)
-        ).float()
+        mask = (torch.arange(max_len_pad, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
 
-        # 梯度计算与更新（损失符号保留，但奖励逻辑已修复）
-        rewards_detach = rewards.detach()
+        recall_low = 0.4
+        recall_mid = 0.7
+        recall_high = 0.9
+
+        if batch_recall < recall_low:
+            loss_weight = 3.0
+            recall_bonus = 0.0
+        elif batch_recall < recall_mid:
+            loss_weight = 2.0
+            recall_bonus = 0.1
+        elif batch_recall < recall_high:
+            loss_weight = 1.5
+            recall_bonus = 0.2
+        else:
+            loss_weight = 1.0
+            recall_bonus = 0.3
+
+        base_loss = -(rewards.detach() * logps * mask).sum()
+        final_loss = (base_loss * loss_weight) - (recall_bonus * bs)
+
+        print(f"Loss Adjust | Base Loss: {base_loss.item():.4f}, Weight: {loss_weight:.1f}, Bonus: {recall_bonus:.1f}, Final Loss: {final_loss.item():.4f}")
+
         self.optimizer.zero_grad(set_to_none=True)
-        # 损失 = -（奖励 × 对数概率）× mask → 奖励越负（F1越小），loss越大
-        loss = -(rewards_detach * logps * mask).sum()
-
-        loss.backward()
-        grad_norm = torch.nn.utils.clip_grad_norm_(
-            self.model.parameters(), max_norm=1.0
-        )
+        final_loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
         self.optimizer.step()
 
-        # 打印关键指标
-        param_mean = torch.mean(
-            torch.stack(
-                [p.data.mean() for p in self.model.parameters() if p.requires_grad]
-            )
-        )
-        grad_mean = torch.mean(
-            torch.stack(
-                [
-                    (
-                        p.grad.mean()
-                        if p.grad is not None
-                        else torch.tensor(0.0, device=self.device)
-                    )
-                    for p in self.model.parameters()
-                    if p.requires_grad
-                ]
-            )
-        )
-        print(
-            f"\nGrad Check | Total Grad Norm: {grad_norm:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}"
-        )
-        print(f"loss: {loss.item():.4f}")
-        return loss.item()
+        param_mean = torch.mean(torch.stack([p.data.mean() for p in self.model.parameters() if p.requires_grad]))
+        grad_mean = torch.mean(torch.stack([p.grad.mean() if p.grad is not None else torch.tensor(0.0, device=self.device) for p in self.model.parameters() if p.requires_grad]))
+        print(f"\nGrad Check | Norm: {grad_norm:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}")
+        print(f"Final Loss: {final_loss.item():.4f}")
+
+        return final_loss.item()

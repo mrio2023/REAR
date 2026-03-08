@@ -80,5 +80,5 @@ class Agent(nn.Module):
                 print("当前候选者的数目", candiLen)
                 print("出了问题！")
             batch_logits.append(action_logits)
-
+            
         return batch_logits

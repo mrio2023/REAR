@@ -118,10 +118,10 @@ def eval_f1(
     pred_comm: Union[List, Set], true_comm: Union[List, Set]
 ) -> float:
     """
-    【静态函数】单独计算F1分数（奖励函数核心）
+    【静态函数】单独计算F1分数（临时偏向Recall）
     :param pred_comm: 预测的社区节点列表/集合
     :param true_comm: 真实的社区节点列表/集合
-    :return: F1分数（浮点型）
+    :return: 偏向Recall的F1分数（浮点型）
     """
     pred_set = set(pred_comm) if isinstance(pred_comm, list) else pred_comm
     true_set = set(true_comm) if isinstance(true_comm, list) else true_comm
@@ -129,9 +129,13 @@ def eval_f1(
     intersect = true_set & pred_set
     p = len(intersect) / len(pred_set) if pred_set else 0.0
     r = len(intersect) / len(true_set) if true_set else 0.0
-    
-    if (p + r) <= 0:
-        return 0.0
-    return 2 * p * r / (p + r)
 
+    # ========== 核心修改：给Recall加权重 ==========
+    r_weight = 80  # Recall权重（可调：1.2-2.0，越大越偏向Recall）
+    weighted_r = r * r_weight
+    # ========== 替代原有F1计算 ==========
+    
+    if (p + weighted_r) <= 0:
+        return 0.0
+    return 2 * p * weighted_r / (p + weighted_r)  # 用加权后的Recall计算F1
 

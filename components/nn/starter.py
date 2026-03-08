@@ -146,12 +146,12 @@ class Starter:
                     model.parameters(), lr=self.params.get("lr", 1e-4)
                 ),
                 device=device,
-                maxLen=self.params.get("maxLen", 20),
-                gamma=self.params.get("gamma", 0.9),
-                f1_base_weight=self.params.get("f1_base_weight", 0.5),
-                p_bias=self.params.get("p_bias", 0.1),
-                min_f1_threshold=self.params.get("min_f1_threshold", 0.1),
-                len_penalty_coeff=self.params.get("len_penalty_coeff", 0.01),
+                maxLen=self.params.get("maxLen"),
+                gamma=self.params.get("gamma"),
+                f1_base_weight=self.params.get("f1_base_weight"),
+                p_bias=self.params.get("p_bias"),
+                min_f1_threshold=self.params.get("min_f1_threshold"),
+                len_penalty_coeff=self.params.get("len_penalty_coeff"),
             )
 
             # 4. 训练过程：透传epoch/seedNum

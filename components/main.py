@@ -64,14 +64,14 @@ DATASET_CONFIGS = {
         "expand_hop": 2,
         "min_community_size": 1,
         # 奖励层面：纯精度惩罚
-        "p_bias": 1.0,
+        "p_bias": 0,
         "min_f1_threshold": 0,
         "len_penalty_coeff": 0.9,
         # 训练层面：限制扩张+充分训练
-        "maxTraLen": 10,
+        "maxTraLen": 16,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 30,
+        "epoch": 50,
         # 其他参数
         "f1_base_weight": 1.0,
         "lr": 1e-4,
@@ -86,10 +86,10 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 2,
         "expand_hop": 2,
         "min_community_size": 2,
-        "maxTraLen": 10,
-        "p_bias": 0.8,
+        "maxTraLen": 16,
+        "p_bias": 10,
         "len_penalty_coeff": 0.99,
-        "min_f1_threshold": 0.8,
+        "min_f1_threshold": 0,
         "gamma": 0.99,
         "seedNum": 40,
         "epoch": 30,
@@ -178,5 +178,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
-    dataset_list = ["ibm"]
+    dataset_list = ["elliptic"]
     final_results = train_all_datasets(dataset_list, seed=2026)
