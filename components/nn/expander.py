@@ -18,7 +18,7 @@ class Expander:
         f1_base_weight: float = 1.0,  # F1基础权重
         p_bias: float = 0.2,  # 精度倾斜系数
         min_f1_threshold: float = 0.1,  # 最小F1阈值
-        len_penalty_coeff: float = 0.95,  # 长度惩罚系数
+        len_penalty_coeff: float = 0,  # 长度惩罚系数
     ):
         self.graph = graph
         self.model = model
@@ -59,87 +59,114 @@ class Expander:
                 )
                 continue
 
-            # 统一logits维度
-            if batch_logits.dim() > 1:
-                batch_logits = batch_logits.squeeze()
-                batch_logits = (
-                    batch_logits.mean(dim=-1)
-                    if batch_logits.dim() > 1
-                    else batch_logits
-                )
-
             # 贪心选argmax
-            try:
-                dist = torch.distributions.Categorical(logits=batch_logits)
-                action = torch.argmax(dist.probs)
-                log_prob = dist.log_prob(action)
-            except (ValueError, RuntimeError):
-                log_probs_dist = F.log_softmax(batch_logits, dim=-1)
-                action = torch.argmax(log_probs_dist)
-                log_prob = log_probs_dist[action]
+            dist = torch.distributions.Categorical(logits=batch_logits)
+            action = torch.argmax(dist.probs)
+            log_prob = dist.log_prob(action)
 
             log_prob = log_prob.squeeze() if log_prob.dim() > 0 else log_prob
             log_prob.requires_grad_(True)
 
-            action_item = (
-                int(action.item()) if isinstance(action, torch.Tensor) else action
-            )
+            action_item = int(action.item()) if isinstance(action, torch.Tensor) else action
             actions.append(action_item if action_item != "Stp" else "Stp")
             log_probs.append(log_prob)
 
         return actions, log_probs
 
     def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
-        """准备模型输入"""
+        """准备模型输入：为空邻居填充假样本，保证维度一致"""
         t_tra_vector, t_seed_vector, indptr, choices = [], [], [], []
         offset = 0
+        # 获取嵌入维度（从第一个有效节点的嵌入中提取）
+        embed_dim = tra_vector[0].shape[-1] if tra_vector else 64  # 兜底维度，可根据实际调整
+        
         for i, tra in enumerate(tra_nodes):
             neigh = self.graph.getNodesNeigh(tra)
-            unique_neigh = list(set(neigh) - set(tra))
+            unique_neigh = list(set(neigh) - set(tra))  
+
+            # ========== 核心修改：空邻居处理逻辑 ==========
+            if len(unique_neigh) <= 0:
+                # 1. 填充假嵌入（全0张量，维度和正常嵌入一致）
+                fake_embed = torch.zeros((1, embed_dim), dtype=torch.float32, device=self.device)
+                t_tra_vector.append(fake_embed)
+                t_seed_vector.append(fake_embed)
+                # 添加当前节点的真实嵌入（保证offset递增逻辑一致）
+                t_tra_vector.append(tra_vector[i].unsqueeze(0))
+                t_seed_vector.append(seed_vector[i].unsqueeze(0))
+                
+                # 2. 标记choices为Stp，indptr正常记录偏移（保证长度一致）
+                choices.append("Stp")
+                indptr.append((offset, offset + 2, offset + 1))  # 假邻居+当前节点，共2个元素
+                offset += 2  # 偏移量同步增加
+                continue
+            # ========== 空邻居处理结束 ==========
+
+            # 非空邻居的正常逻辑
             choices.append(unique_neigh)
             neigh_embed = self.graph.nodesEmbed(unique_neigh)
 
             if not isinstance(neigh_embed, torch.Tensor):
-                if isinstance(neigh_embed, list) and len(neigh_embed) == 0:
-                    neigh_embed = torch.empty(
-                        0,
-                        tra_vector[i].size(-1),
-                        dtype=torch.float32,
-                        device=self.device,
-                    )
-                else:
-                    neigh_embed = torch.tensor(
-                        (
-                            np.stack(neigh_embed)
-                            if isinstance(neigh_embed, list)
-                            else neigh_embed
-                        ),
-                        dtype=torch.float32,
-                        device=self.device,
-                    )
+                neigh_embed = torch.tensor(
+                    np.stack(neigh_embed) if isinstance(neigh_embed, list) else neigh_embed,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
             else:
                 neigh_embed = neigh_embed.to(self.device)
+
             if self.model.training:
                 neigh_embed.requires_grad_(True)
 
-            t_tra_vector.extend([neigh_embed, tra_vector[i].unsqueeze(0)])
-            t_seed_vector.extend([neigh_embed, seed_vector[i].unsqueeze(0)])
+            # 1. 记录初始长度
+            beforeLen = len(t_tra_vector)
+
+            # 2. 逐个添加所有邻居的嵌入
+            for n in neigh_embed:
+                v = n.unsqueeze(0)
+                t_tra_vector.append(v)
+                t_seed_vector.append(v)
+
+            # 3. 添加当前节点的嵌入
+            t_tra_vector.append(tra_vector[i].unsqueeze(0))
+            t_seed_vector.append(seed_vector[i].unsqueeze(0))
+        
+            afterLen = len(t_tra_vector)
+            increase = afterLen - beforeLen  
+            target_increase = len(unique_neigh) + 1
+
+            if increase != target_increase:
+                print("===== 嵌入添加数量异常 =====")
+                print(f"节点ID: {tra} | 索引: {i}")
+                print(f"邻居数量（unique_neigh）: {len(unique_neigh)}")
+                print(f"预期新增元素数（邻居+当前节点）: {target_increase}")
+                print(f"实际新增元素数: {increase}")
+                print(f"初始长度: {beforeLen} | 最终长度: {afterLen}")
+                print(f"差值（预期-实际）: {target_increase - increase}")
+                raise ValueError(f"节点{tra}嵌入添加数量异常")
+
+            # 更新indptr和offset（非空邻居场景）
             indptr.append(
                 (offset, offset + 1 + len(unique_neigh), offset + len(unique_neigh))
             )
             offset += len(unique_neigh) + 1
 
+        # 边界处理：如果所有节点都是空邻居，返回空张量（保持维度一致）
+        if not t_seed_vector or not t_tra_vector:
+            seed_embed = torch.empty((0, embed_dim), dtype=torch.float32, device=self.device)
+            tra_embed = torch.empty((0, embed_dim), dtype=torch.float32, device=self.device)
+        else:
+            seed_embed = torch.cat(t_seed_vector, dim=0)
+            tra_embed = torch.cat(t_tra_vector, dim=0)
+
         return (
-            torch.cat(t_seed_vector, dim=0),
-            torch.cat(t_tra_vector, dim=0),
+            seed_embed,
+            tra_embed,
             np.array(indptr),
             choices,
         )
 
     def add_node(self, new_node, tra_nodes, index):
         """添加节点到轨迹，更新done状态"""
-        if len(self.done) <= index:
-            self.done.extend([False] * (index + 1 - len(self.done)))
         if (
             new_node in (None, "Stp", -1)
             or len(tra_nodes[index]) >= self.maxLen
@@ -205,6 +232,12 @@ class Expander:
 
             for j, orig_idx in enumerate(active_indices):
                 ac, logp = actions[j], logps[j]
+                # ========== 增强空邻居的采样跳过逻辑 ==========
+                if batch_candidates[j] == "Stp":
+                    self.add_node("Stp", tra_nodes, orig_idx)
+                    tra_logps[orig_idx].append(logp)
+                    continue
+                # ========== 原有逻辑 ==========
                 if ac == "Stp" or ac >= len(batch_candidates[j]):
                     self.add_node("Stp", tra_nodes, orig_idx)
                     tra_logps[orig_idx].append(logp)
@@ -265,7 +298,7 @@ class Expander:
                 curr_f1 = self.eval_f1(temp_com, true_com_set)
                 curr_p, curr_r, _ = self.eval_scores(temp_com, true_com_set)
 
-                # 精度倾斜+增量奖励+长度惩罚（和你原逻辑一致）
+                # 精度倾斜+增量奖励+长度惩罚
                 if curr_p < curr_r:
                     biased_f1 = curr_f1 * (1 + self.p_bias)
                 else:
@@ -305,7 +338,7 @@ class Expander:
             rewards_padded[i, : len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
-        # 4. logps填充（和你原逻辑一致）
+        # 4. logps填充
         logps_padded = []
         for lp_list in logps:
             padded = [
@@ -325,8 +358,7 @@ class Expander:
             < (lengths - 1).unsqueeze(1)
         ).float()
 
-        # ==================== 验证梯度流向的核心代码 ====================
-
+        # 梯度计算与更新
         rewards_detach = rewards.detach()
         self.optimizer.zero_grad(set_to_none=True)
         loss = -(rewards_detach * logps * mask).sum()*0.01
@@ -334,10 +366,10 @@ class Expander:
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(
             self.model.parameters(), max_norm=1.0
-        )  # 第二步：裁剪梯度
-        self.optimizer.step()  # 第三步：更新参数
+        )
+        self.optimizer.step()
 
-        # 打印关键指标（验证裁剪生效）
+        # 打印关键指标
         param_mean = torch.mean(
             torch.stack(
                 [p.data.mean() for p in self.model.parameters() if p.requires_grad]

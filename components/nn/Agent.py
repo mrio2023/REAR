@@ -7,6 +7,7 @@ class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
 
+
 def make_linear_block(in_dim, out_dim, activation=Swish, norm_type=None):
     layers = [nn.Linear(in_dim, out_dim)]
     if norm_type == "batch":
@@ -17,6 +18,7 @@ def make_linear_block(in_dim, out_dim, activation=Swish, norm_type=None):
         layers.append(activation())
     return nn.Sequential(*layers)
 
+
 class Agent(nn.Module):
     def __init__(self, hidden_size, input_size, norm_type=None):
         super().__init__()
@@ -25,12 +27,12 @@ class Agent(nn.Module):
 
         self.seed_embedding = nn.Linear(input_size, hidden_size, bias=True)
         self.node_embedding = nn.Linear(input_size, hidden_size, bias=True)
-        
+
         self.input_mapping = nn.Sequential(
             make_linear_block(hidden_size, hidden_size, Swish, norm_type),
-            make_linear_block(hidden_size, hidden_size, Swish, norm_type)
+            make_linear_block(hidden_size, hidden_size, Swish, norm_type),
         )
-        
+
         self.node_score_layer = nn.Linear(hidden_size, 1, bias=True)
         self.stopping_score_layer = nn.Linear(hidden_size, 2, bias=True)
 
@@ -48,29 +50,35 @@ class Agent(nn.Module):
         h_node = self.node_embedding(x_nodes)
         h = h_seed + h_node
         h = self.input_mapping(h)
-        
+
         node_scores = self.node_score_layer(h).squeeze(1)
 
         batch_logits = []
         for startpoint, endpoint, candidate_endpoint in indptr:
             if startpoint == endpoint:
-                raise ValueError('Finished Episode!')
-            
+                raise ValueError("Finished Episode!")
+
+            candiLen = candidate_endpoint - startpoint
+
             # 停止节点特征计算
             stop_node = h[startpoint:endpoint].sum(dim=0, keepdim=True)
             stop_node = stop_node / (endpoint - startpoint)
-            
+
             # 计算各类logits
             node_logits = node_scores[startpoint:candidate_endpoint]
             stopping_logits = self.stopping_score_layer(stop_node).squeeze(0)
-            
+
             # 统一维度并拼接
             stop_action_logit = stopping_logits[1:].squeeze()
-            action_logits = torch.cat([
-                node_logits + stopping_logits[0],
-                stop_action_logit.unsqueeze(0)
-            ], dim=0)
-            
+            action_logits = torch.cat(
+                [node_logits + stopping_logits[0], stop_action_logit.unsqueeze(0)],
+                dim=0,
+            )
+
+            if len(action_logits) - candiLen != 1:
+                print("输出的actionlogits长度", len(action_logits))
+                print("当前候选者的数目", candiLen)
+                print("出了问题！")
             batch_logits.append(action_logits)
-        
+
         return batch_logits

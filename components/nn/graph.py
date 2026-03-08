@@ -70,10 +70,6 @@ class Graph:
         return self.embed_cache[node]
 
     def nodesEmbed(self, nodes: list):
-        if not self.embed_cache or self.embed_dim == 0:
-            return np.zeros((len(nodes), 88), dtype=np.float32)
-
-        # 优化：用列表推导式+np.array直接转换，减少中间变量
         embeds = np.array([self.embed_cache.get(n, np.zeros(self.embed_dim, dtype=np.float32)) 
                            for n in nodes], dtype=np.float32)
         return embeds
