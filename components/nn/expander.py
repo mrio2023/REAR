@@ -361,7 +361,7 @@ class Expander:
         # 梯度计算与更新
         rewards_detach = rewards.detach()
         self.optimizer.zero_grad(set_to_none=True)
-        loss = -(rewards_detach * logps * mask).sum()*0.01
+        loss = -(rewards_detach * logps * mask).sum()
 
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(

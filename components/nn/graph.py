@@ -13,12 +13,12 @@ class Graph:
         # ========== 优化1：批量构建邻接表（替代逐行iterrows） ==========
         self.adjmap = self._cal_adj_map_batch(self.df_edge, direction="from_to")
         self.adjtomap = self._cal_adj_map_batch(self.df_edge, direction="to_from")
-        
+
         # ========== 优化2：提前过滤空值+批量构建标签映射 ==========
         self.allNameTags = self._get_valid_tags()
         self.tag2idx = {tag: i for i, tag in enumerate(self.allNameTags)}
         self.n_nodes = len(self.df_nodes)
-        
+
         # ========== 优化3：批量缓存社区种子（减少循环开销） ==========
         self.community_seeds = self._cache_community_seeds_batch()
         self.embedsize = self.initEmbedSize()
@@ -37,7 +37,7 @@ class Graph:
         embed_cache = {}
         embed_dim = 0
 
-        if self.df_feature.empty or 'address' not in self.df_feature.columns:
+        if self.df_feature.empty or "address" not in self.df_feature.columns:
             return embed_cache, embed_dim
 
         # 优化：一次性提取所有地址和嵌入，避免逐行循环
@@ -46,17 +46,19 @@ class Graph:
             return embed_cache, embed_dim
 
         # 向量化提取嵌入矩阵
-        addresses = self.df_feature['address'].values
+        addresses = self.df_feature["address"].values
         embed_matrix = self.df_feature.iloc[:, 1:].values.astype(np.float32)
-        
+
         # 统一维度（向量化操作，比循环快10倍+）
         if embed_matrix.shape[1] != embed_dim:
             pad_width = max(0, embed_dim - embed_matrix.shape[1])
             if pad_width > 0:
-                embed_matrix = np.pad(embed_matrix, ((0,0), (0,pad_width)), mode='constant')
+                embed_matrix = np.pad(
+                    embed_matrix, ((0, 0), (0, pad_width)), mode="constant"
+                )
             else:
                 embed_matrix = embed_matrix[:, :embed_dim]
-        
+
         # 批量构建缓存字典
         embed_cache = dict(zip(addresses, embed_matrix))
 
@@ -70,17 +72,23 @@ class Graph:
         return self.embed_cache[node]
 
     def nodesEmbed(self, nodes: list):
-        embeds = np.array([self.embed_cache.get(n, np.zeros(self.embed_dim, dtype=np.float32)) 
-                           for n in nodes], dtype=np.float32)
+        embeds = np.array(
+            [
+                self.embed_cache.get(n, np.zeros(self.embed_dim, dtype=np.float32))
+                for n in nodes
+            ],
+            dtype=np.float32,
+        )
         return embeds
 
     # ========== 邻居查询（保留原有优化） ==========
     def getSingleNodeNeighbor(self, node: str):
         if node in self.neighbor_cache:
             return self.neighbor_cache[node].copy()
-        
-        neigh = [d["to"] for d in self.adjmap.get(node, [])] + \
-                [d["from"] for d in self.adjtomap.get(node, [])]
+
+        neigh = [d["to"] for d in self.adjmap.get(node, [])] + [
+            d["from"] for d in self.adjtomap.get(node, [])
+        ]
         neigh = list(set(neigh))
         self.neighbor_cache[node] = neigh
         return neigh.copy()
@@ -104,7 +112,7 @@ class Graph:
         """批量构建邻接表，替代逐行iterrows"""
         if df_edge.empty:
             return {}
-        
+
         adj_map = {}
         if direction == "from_to":
             # 按from分组，批量聚合to节点
@@ -113,15 +121,17 @@ class Graph:
             adj_map = {k: [{"to": v_item} for v_item in v] for k, v in grouped.items()}
         else:  # to_from
             grouped = df_edge.groupby("to")["from"].apply(list).to_dict()
-            adj_map = {k: [{"from": v_item} for v_item in v] for k, v in grouped.items()}
-        
+            adj_map = {
+                k: [{"from": v_item} for v_item in v] for k, v in grouped.items()
+            }
+
         return adj_map
 
     def _cache_community_seeds_batch(self):
         """批量缓存社区种子，减少循环开销"""
         if self.df_hacker.empty:
             return {}
-        
+
         # 优化：按name_tag分组，批量提取地址并转集合
         community_seeds = (
             self.df_hacker.groupby("name_tag")["address"]
@@ -130,31 +140,44 @@ class Graph:
         )
         return community_seeds
 
-    def sampleTrajectory(self, node: str, traj_length: int):
-        tra = [node]
+    def sampleTrajectory(self, node: str):
+        """
+        移除采样逻辑，直接返回原始hacker社区节点列表（保留原函数入参，兼容调用逻辑）
+        Args:
+            node: 起始节点（用于匹配所属hacker社区）
+            traj_length: 原采样长度参数（仅保留，无实际作用）
+        Returns:
+            原始hacker社区节点列表（按地址排序，保证可复现）
+        """
+        # 提前构建addr2tag映射（避免重复查询df）
+        if not hasattr(self, "_addr2tag"):
+            self._addr2tag = dict(
+                zip(self.df_hacker["address"], self.df_hacker["name_tag"])
+            )
 
-        # 优化：提前构建addr2tag映射（避免重复查询df）
-        if not hasattr(self, '_addr2tag'):
-            self._addr2tag = dict(zip(self.df_hacker["address"], self.df_hacker["name_tag"]))
-        
+        # 获取节点所属hacker标签
         name_tag = self._addr2tag.get(node)
         if not name_tag:
-            return tra
+            # 无所属社区，仅返回起始节点（和原逻辑一致）
+            return [node]
 
+        # 获取原始社区节点集合（核心修改：移除采样，直接用全量）
         community_nodes = self.community_seeds.get(name_tag, set())
-        community_nodes = {n for n in community_nodes if n in self.neighbor_cache or self.getSingleNodeNeighbor(n)}
         if not community_nodes:
-            return tra
+            return [node]
 
-        while len(tra) < traj_length:
-            current_node = tra[-1]
-            current_neighbors = set(self.getSingleNodeNeighbor(current_node))
-            candidates = [n for n in current_neighbors if n in community_nodes and n not in tra]
+        # 合法性校验：过滤无邻居的无效节点（保留原逻辑）
+        valid_community_nodes = {
+            n
+            for n in community_nodes
+            if n in self.neighbor_cache or self.getSingleNodeNeighbor(n)
+        }
 
-            if not candidates:
-                return tra
+        # 无有效节点时返回起始节点
+        if not valid_community_nodes:
+            return [node]
 
-            selected_node = random.choice(candidates)
-            tra.append(selected_node)
+        # 转换为列表（排序保证返回结果稳定，避免随机）
+        tra = sorted(list(valid_community_nodes))
 
         return tra

@@ -1,77 +1,97 @@
 import torch
 import os
-from nn.starter import Starter
-from nn.configure import Configure
+from nn.starter import Starter  # 注意：这里的Starter要使用之前纯字典透传的版本
 
 # 设置工作目录（精简路径计算逻辑）
 current_file = os.path.abspath(__file__)
 sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
 os.chdir(sci_dir)
 
-# 数据集参数配置表（结构化管理，包含所有Configure必填参数）
+# 数据集参数配置表（结构化管理，所有参数集中在这里）
 DATASET_CONFIGS = {
     "ibm": {
+        # 基础参数
+        "dfname": "ibm",
         # 数据层面：减少无关节点干扰
-        "normal_node_ratio": 3, "expand_hop": 2, "min_community_size": 1,
+        "normal_node_ratio": 3, 
+        "expand_hop": 2, 
+        "min_community_size": 1,
         # 奖励层面：纯精度惩罚
-        "p_bias": 1.0, "min_f1_threshold": 0, "len_penalty_coeff": 0.9,
+        "p_bias": 1.0, 
+        "min_f1_threshold": 0, 
+        "len_penalty_coeff": 0.9,
         # 训练层面：限制扩张+充分训练
-        "maxTraLen": 16, "gamma": 0.99, "seedNum": 40, "epoch": 30,
-        # F1基础权重（公共参数，统一配置）
-        "f1_base_weight": 1.0
+        "maxTraLen": 20, 
+        "gamma": 0.99, 
+        "seedNum": 40, 
+        "epoch": 30,
+        # 其他参数
+        "f1_base_weight": 1.0,
+        "lr": 1e-4,
+        "maxLen": 20,
+        "hidden_size": 128,
+        "device": "cuda" if torch.cuda.is_available() else "cpu"
     },
     "elliptic": {
+        # 基础参数
+        "dfname": "elliptic",
         # Recall偏好配置
-        "normal_node_ratio": 2, "expand_hop": 2, "min_community_size": 2,
-        "maxTraLen": 100, "p_bias": 0.8, "len_penalty_coeff": 0.99,
-        "min_f1_threshold": 0.8, "gamma": 0.99, "seedNum": 40, "epoch": 30,
-        "f1_base_weight": 1.0
+        "normal_node_ratio": 2, 
+        "expand_hop": 2, 
+        "min_community_size": 2,
+        "maxTraLen": 100, 
+        "p_bias": 0.8, 
+        "len_penalty_coeff": 0.99,
+        "min_f1_threshold": 0.8, 
+        "gamma": 0.99, 
+        "seedNum": 40, 
+        "epoch": 30,
+        # 其他参数
+        "f1_base_weight": 1.0,
+        "lr": 1e-4,
+        "maxLen": 20,
+        "hidden_size": 128,
+        "device": "cuda" if torch.cuda.is_available() else "cpu"
     },
     "elliptic2": {
+        # 基础参数
+        "dfname": "elliptic2",
         # 通用参数
-        "normal_node_ratio": 2, "expand_hop": 2, "min_community_size": 5,
-        "maxTraLen": 16, "p_bias": 0.3, "len_penalty_coeff": 0.9,
-        "min_f1_threshold": 0.2, "gamma": 0.99, "seedNum": 40, "epoch": 30,
-        "f1_base_weight": 1.0
+        "normal_node_ratio": 2, 
+        "expand_hop": 2, 
+        "min_community_size": 5,
+        "maxTraLen": 16, 
+        "p_bias": 0.3, 
+        "len_penalty_coeff": 0.9,
+        "min_f1_threshold": 0.2, 
+        "gamma": 0.99, 
+        "seedNum": 40, 
+        "epoch": 30,
+        # 其他参数
+        "f1_base_weight": 1.0,
+        "lr": 1e-4,
+        "maxLen": 20,
+        "hidden_size": 128,
+        "device": "cuda" if torch.cuda.is_available() else "cpu"
     }
 }
 
 def train_single_dataset(dfname: str, seed: int = 2026):
-    """训练单个数据集，返回测试指标"""
+    """训练单个数据集，返回测试指标（纯字典传参）"""
     print(f"\n{'='*70}\n🚀 开始训练数据集：{dfname} (种子={seed})\n{'='*70}")
     
-    # 核心修复：按Configure的参数要求，传入所有必填参数
+    # 检查配置是否存在
     if dfname not in DATASET_CONFIGS:
         print(f"❌ 数据集 {dfname} 无配置参数，终止训练")
         return None
     
-    cfg = DATASET_CONFIGS[dfname]
-    # 正确初始化Configure（传入所有必填参数）
-    conf = Configure(
-        dfname=dfname,
-        normal_node_ratio=cfg["normal_node_ratio"],
-        expand_hop=cfg["expand_hop"],
-        min_community_size=cfg["min_community_size"],
-        maxTraLen=cfg["maxTraLen"],
-        gamma=cfg["gamma"],
-        f1_base_weight=cfg["f1_base_weight"],
-        p_bias=cfg["p_bias"],
-        min_f1_threshold=cfg["min_f1_threshold"],
-        len_penalty_coeff=cfg["len_penalty_coeff"],
-        seedNum=cfg["seedNum"],
-        # device保留自动检测（Configure内部处理）
-        device=None
-    )
+    # 直接获取参数字典（核心：不再创建Configure对象）
+    params = DATASET_CONFIGS[dfname]
     
-    # 补充epoch参数（Configure没有这个参数，给conf对象新增）
-    conf.epoch = cfg["epoch"]
-    
-    # 修正设备参数（可选，Configure内部已自动检测，这里可省略）
-    # conf.device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # 初始化Starter并调用run方法
-    starter = Starter(conf=conf)
+    # 初始化Starter（直接传参数字典，不再传Configure）
+    starter = Starter(params=params)
     try:
+        # 调用run方法（参数完全解耦）
         test_metrics = starter.run(dfname=dfname, seed=seed)
         
         # 打印结果
@@ -109,5 +129,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
-    dataset_list = ["elliptic"]
+    dataset_list = ["elliptic2"]
     final_results = train_all_datasets(dataset_list, seed=2026)
