@@ -14,16 +14,13 @@ from .tool import eval_scores, eval_f1
 
 class Starter:
     def __init__(self, params: Dict):
-        """
-        仅接收参数字典，不做任何本地赋值，全程透传（解耦核心）
-        :param params: 包含所有配置的字典，key为参数名，value为参数值
-        """
-        self.params = params  # 仅保存字典引用，不拆解为实例属性
+       
+        self.params = params  
 
     def eval_model(self, expander: Expander, test_g: Graph) -> Dict:
-        """批量加速版模型评估，直接从self.params取参数"""
+      
         expander.model.eval()
-        # 预处理真实社区
+
         true_coms = [
             (tag, list(addr_set))
             for tag, addr_set in test_g.community_seeds.items()
@@ -32,7 +29,7 @@ class Starter:
 
         test_seeds = {}
         for name_tag, addr_list in true_coms:
-            # 直接用self.params['maxTraLen']，无本地属性
+      
             sample_num = min(
                 int(1 + len(addr_list) / self.params.get("maxTraLen", 50)),
                 len(addr_list),
@@ -44,8 +41,8 @@ class Starter:
         )
         print("-" * 60)
 
-        # 2. 批量整理种子
-        start_batch = time.time()
+     
+
         all_seeds_flat = []
         community_map = []
         for name_tag, seeds in test_seeds.items():
@@ -55,24 +52,22 @@ class Starter:
         # 3. 批量推理
         pred_coms_flat = []
         if all_seeds_flat:
-            start_infer = time.time()
+          
             with torch.no_grad():
                 pred_coms_flat, _ = expander.sample_bs_trajectories(all_seeds_flat)
-            infer_time = time.time() - start_infer
+          
 
             print(
-                f"   推理种子数：{len(all_seeds_flat)}，单种子平均耗时：{infer_time/len(all_seeds_flat):.4f} 秒/种子"
+                f"   推理种子数：{len(all_seeds_flat)}"
             )
 
-        # 4. 结果整理
-        start_result = time.time()
+      
         community_pred = {tag: set() for tag in test_seeds.keys()}
         for idx, pred_com in enumerate(pred_coms_flat):
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred[community_map[idx]].update(valid_nodes)
 
-        # 5. 计算指标
-        start_metric = time.time()
+      
         metrics = {"precision": [], "recall": [], "f1": []}
         for name_tag, true_addr in true_coms:
             if name_tag not in community_pred:
@@ -161,12 +156,12 @@ class Starter:
 
             # 4. 训练过程：透传epoch/seedNum
             origin_seeds = dp.train_hacker["address"].tolist()
-            epoch = self.params.get("epoch", 30)
-            seedNum = self.params.get("seedNum", 100)
+            epoch = self.params.get("epoch")
+            seedNum = self.params.get("seedNum")
             print(f"\n🚀 开始训练：{epoch}轮 | 每轮采样{seedNum}种子")
             for i in range(epoch):
                 seeds = random.sample(origin_seeds, k=seedNum)
-                true_coms = [train_g.sampleTrajectory(s) for s in seeds]
+                true_coms = [train_g.sampleTrajectory(s,maxlen=self.params.get("maxLen")) for s in seeds]
                 loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
                 print(f"📝 Epoch {i} | loss: {loss:.4f}")
 

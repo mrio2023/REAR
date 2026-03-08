@@ -140,14 +140,14 @@ class Graph:
         )
         return community_seeds
 
-    def sampleTrajectory(self, node: str):
+    def sampleTrajectory(self, node: str, maxlen: int):
         """
-        移除采样逻辑，直接返回原始hacker社区节点列表（保留原函数入参，兼容调用逻辑）
+        核心采样逻辑：基于邻居拓展采样社区内节点（控制长度，避免梯度爆炸）
         Args:
             node: 起始节点（用于匹配所属hacker社区）
-            traj_length: 原采样长度参数（仅保留，无实际作用）
+            maxlen: 采样最大长度（核心控制，防止节点数过多）
         Returns:
-            原始hacker社区节点列表（按地址排序，保证可复现）
+            采样后的轨迹列表（长度≤maxlen，仅包含社区内节点）
         """
         # 提前构建addr2tag映射（避免重复查询df）
         if not hasattr(self, "_addr2tag"):
@@ -155,29 +155,48 @@ class Graph:
                 zip(self.df_hacker["address"], self.df_hacker["name_tag"])
             )
 
-        # 获取节点所属hacker标签
+        # 初始化轨迹，起始节点必包含
+        tra = [node]
+        if len(tra) >= maxlen:
+            return tra[:maxlen]
+
+        # 获取节点所属hacker标签（确定采样范围）
         name_tag = self._addr2tag.get(node)
         if not name_tag:
-            # 无所属社区，仅返回起始节点（和原逻辑一致）
-            return [node]
+            # 无所属社区，仅返回起始节点
+            return tra
 
-        # 获取原始社区节点集合（核心修改：移除采样，直接用全量）
+        # 获取该标签下的所有社区节点（采样范围）
         community_nodes = self.community_seeds.get(name_tag, set())
         if not community_nodes:
-            return [node]
+            return tra
 
-        # 合法性校验：过滤无邻居的无效节点（保留原逻辑）
-        valid_community_nodes = {
-            n
-            for n in community_nodes
-            if n in self.neighbor_cache or self.getSingleNodeNeighbor(n)
-        }
+        # ========== 核心采样逻辑：邻居拓展+社区过滤+长度控制 ==========
+        # 已采样的节点（去重）
+        sampled_nodes = set(tra)
+        # 待采样的候选节点（初始为起始节点的邻居）
+        candidate_nodes = self.getSingleNodeNeighbor(node)
 
-        # 无有效节点时返回起始节点
-        if not valid_community_nodes:
-            return [node]
+        # 循环采样，直到达到maxlen或无候选节点
+        while len(tra) < maxlen and candidate_nodes:
+            # 筛选候选节点：属于社区 + 未被采样过
+            valid_candidates = [n for n in candidate_nodes if n in community_nodes and n not in sampled_nodes]
+            
+            if not valid_candidates:
+                # 无有效候选，终止采样
+                break
+            
+            # 采样1个节点（可改为随机采样/度数优先采样，这里默认取第一个）
+            # 【可选：随机采样】import random; selected = random.choice(valid_candidates)
+            selected = valid_candidates[0]
+            
+            # 添加到轨迹
+            tra.append(selected)
+            sampled_nodes.add(selected)
+            
+            # 更新候选节点：新增当前节点的邻居（拓展1-hop）
+            new_neighbors = self.getSingleNodeNeighbor(selected)
+            candidate_nodes = list(set(candidate_nodes + new_neighbors))  # 去重
 
-        # 转换为列表（排序保证返回结果稳定，避免随机）
-        tra = sorted(list(valid_community_nodes))
-
-        return tra
+        # 最终兜底：确保长度不超过maxlen
+        return tra[:maxlen]
