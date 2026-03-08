@@ -1,82 +1,115 @@
-import torch
+import os
+import random
 import numpy as np
+import pandas as pd
 from sklearn.metrics.pairwise import cosine_similarity
-from typing import List, Union
+from nn.dataProcess import dataProcess
+from nn.graph import Graph
+import torch
+import os
 
 
-class Tool:
-    def __init__(self):
-        pass
+# 设置工作目录（精简路径计算逻辑）
+current_file = os.path.abspath(__file__)
+sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
+os.chdir(sci_dir)
 
-    def pruning(
-        self,
-        community_pooled_embed: Union[np.ndarray, torch.Tensor],
-        neigh_node_embed_list: Union[List[np.ndarray], List[torch.Tensor], np.ndarray, torch.Tensor],
-        neigh_nodes: List[str],
-        safe_min: int = 10,          # 绝对保底：至少保留10个（防止剪到太少）
-        mid_threshold: int = 100,    # 中等邻居数阈值（100以内少剪）
-        big_top_k: int = 50,         # 大数量邻居：最多保留50个
-        small_p: float = 0.5,        # 小数量邻居（<100）：保留50%
-        big_p: float = 0.1           # 大数量邻居（≥100）：保留10%
-    ) -> List[str]:
-        """
-        分层剪枝策略（稳妥版）：
-        1. 邻居数 ≤ safe_min（10）→ 不剪枝（绝对保底）
-        2. safe_min < 邻居数 < mid_threshold（100）→ 保留50%（最少10个，最多50个）
-        3. 邻居数 ≥ mid_threshold（100）→ 保留10% 或 50个（取更小，且≥10个）
-        彻底避免31个节点剪到3个的极端情况！
-        """
-        # ========== 1. 输入格式统一（兼容numpy/torch） ==========
-        # 社区池化向量转numpy并统一为2维
-        if isinstance(community_pooled_embed, torch.Tensor):
-            pooled_embed = community_pooled_embed.detach().cpu().numpy()
-        else:
-            pooled_embed = community_pooled_embed
-        pooled_embed = pooled_embed.reshape(1, -1)  # (1, embed_dim)
+# 固定随机种子
+def set_seed(seed=2026):
+    random.seed(seed)
+    np.random.seed(seed)
 
-        # 邻居嵌入转numpy并统一为2维
-        if isinstance(neigh_node_embed_list, list):
-            if isinstance(neigh_node_embed_list[0], torch.Tensor):
-                neigh_embeds = np.array([e.detach().cpu().numpy() for e in neigh_node_embed_list])
-            else:
-                neigh_embeds = np.array(neigh_node_embed_list)
-        elif isinstance(neigh_node_embed_list, torch.Tensor):
-            neigh_embeds = neigh_node_embed_list.detach().cpu().numpy()
-        else:
-            neigh_embeds = neigh_node_embed_list
-        neigh_embeds = neigh_embeds.reshape(-1, pooled_embed.shape[1])  # (num_neigh, embed_dim)
+# 仅保留数据加载必要参数（无Configure依赖）
+DATASET_PARAMS = {
+    "ibm": {"normal_node_ratio":3, "expand_hop":2, "min_community_size":1},
+    "elliptic": {"normal_node_ratio":2, "expand_hop":2, "min_community_size":2},
+    "elliptic2": {"normal_node_ratio":2, "expand_hop":2, "min_community_size":5}
+}
 
-        # ========== 2. 分层剪枝核心逻辑（稳妥兜底） ==========
-        num_neigh = len(neigh_nodes)
-        if num_neigh == 0:
-            print("⚠️  无邻居节点，返回空列表")
-            return []
+# 核心：邻居Top相似节点同社区比例分析
+def analyze_neighbor_similarity(graph, top_percent=0.5, top_k=50, sample_num=200):
+    # 提取hacker节点和社区映射
+    df_hacker = graph.df_hacker.dropna(subset=["address", "name_tag"])
+    if len(df_hacker) == 0:
+        return 0.0
+    
+    addr2community = dict(zip(df_hacker["address"], df_hacker["name_tag"]))
+    sampled_addrs = random.sample(df_hacker["address"].tolist(), min(len(df_hacker), sample_num))
+    same_ratios = []
+
+    for addr in sampled_addrs:
+        # 获取当前节点嵌入
+        try:
+            node_embed = graph.singleNodeEmbed(addr).reshape(1, -1)
+        except Exception:
+            continue
+
+        # 获取邻居（修复df_edge属性名）
+        edge_df = graph.df_edge
+        neighbors_from = edge_df[edge_df["from"] == addr]["target"].tolist()
+        neighbors_to = edge_df[edge_df["target"] == addr]["source"].tolist()
+        neighbor_addrs = list(set(neighbors_from + neighbors_to))
         
-        # 档1：≤10个 → 不剪枝（绝对保底）
-        if num_neigh <= safe_min:
-            print(f"ℹ️  邻居数={num_neigh} ≤ {safe_min}，不剪枝")
-            return neigh_nodes
+        if len(neighbor_addrs) < 1:
+            continue
+
+        # 过滤有效邻居并计算相似度
+        valid_neighbors, neighbor_embeds = [], []
+        for n_addr in neighbor_addrs:
+            if n_addr not in addr2community:
+                continue
+            try:
+                neighbor_embeds.append(graph.singleNodeEmbed(n_addr))
+                valid_neighbors.append(n_addr)
+            except Exception:
+                continue
         
-        # 档2：10 < 邻居数 < 100 → 保留50%（最少10个，最多50个）
-        elif num_neigh < mid_threshold:
-            keep_num = max(safe_min, int(num_neigh * small_p))  # 50%且≥10
-            keep_num = min(keep_num, big_top_k)                 # 最多50个（避免100以内剪太多）
-            print(f"ℹ️  邻居数={num_neigh}（中等），保留50% → {keep_num}个")
-        
-        # 档3：≥100个 → 保留10% 或 50个（取更小，且≥10）
-        else:
-            keep_num_by_p = int(num_neigh * big_p)
-            keep_num = min(keep_num_by_p, big_top_k)            # 10%或50取更小
-            keep_num = max(keep_num, safe_min)                  # 兜底≥10
-            print(f"ℹ️  邻居数={num_neigh}（大量），10%={keep_num_by_p} → 最终保留{keep_num}个")
+        if len(valid_neighbors) < 1:
+            continue
 
-        # 最终兜底：不超过实际邻居数
-        keep_num = min(keep_num, num_neigh)
+        # 计算Top相似邻居同社区比例
+        sim_scores = cosine_similarity(node_embed, np.array(neighbor_embeds))[0]
+        top_n = max(1, int(len(valid_neighbors)*top_percent/100), top_k)
+        top_indices = np.argsort(sim_scores)[::-1][:top_n]
+        top_neighbors = [valid_neighbors[i] for i in top_indices]
 
-        # ========== 3. 计算相似度并筛选Top邻居 ==========
-        sim_scores = cosine_similarity(pooled_embed, neigh_embeds)[0]
-        sorted_indices = np.argsort(sim_scores)[::-1]  # 降序排序
-        top_indices = sorted_indices[:keep_num]
-        pruned_neigh_nodes = [neigh_nodes[idx] for idx in top_indices]
+        current_comm = addr2community[addr]
+        same_count = sum(1 for n in top_neighbors if addr2community[n] == current_comm)
+        same_ratios.append(same_count / len(top_neighbors))
 
-        return pruned_neigh_nodes
+    return np.mean(same_ratios) if same_ratios else 0.0
+
+# 核心测试函数（完全移除Configure、直接传参）
+def test_embed(dfname, seed=2026):
+    set_seed(seed)
+    if dfname not in DATASET_PARAMS:
+        print(f"❌ 无{dfname}配置")
+        return
+    
+    # 直接传参给dataProcess（无Configure）
+    params = DATASET_PARAMS[dfname]
+    dp = dataProcess(
+        dfname=dfname,
+        normal_node_ratio=params["normal_node_ratio"],
+        expand_hop=params["expand_hop"],
+        min_community_size=params["min_community_size"]
+    )
+
+    # 构建图（直接传参）
+    train_g = Graph(
+        dfnode=dp.train_nodes,
+        dffeature=dp.train_feature,
+        dfhacker=dp.train_hacker,
+        dfedge=dp.train_edge  # 匹配Graph类的df_edge属性
+    )
+
+    # 计算并输出结果
+    ratio = analyze_neighbor_similarity(train_g)
+    print(f"\n📊 {dfname} - Top0.5%/Top50相似邻居同社区率：{ratio:.4f}")
+    # 剪枝可行性判断
+    print(f"✅ 适合余弦剪枝" if ratio > 0.7 else "❌ 不适合余弦剪枝")
+
+# 运行测试
+if __name__ == "__main__":
+    for dfname in ["ibm", "elliptic", "elliptic2"]:
+        test_embed(dfname)

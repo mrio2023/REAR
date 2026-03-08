@@ -22,7 +22,7 @@ DATASET_CONFIGS = {
         "min_f1_threshold": 0,
         "len_penalty_coeff": 0.9,
         # 训练层面：限制扩张+充分训练
-        "maxTraLen": 20,
+        "maxTraLen": 10,
         "gamma": 0.99,
         "seedNum": 40,
         "epoch": 30,
@@ -40,7 +40,7 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 2,
         "expand_hop": 2,
         "min_community_size": 2,
-        "maxTraLen": 100,
+        "maxTraLen": 10,
         "p_bias": 0.8,
         "len_penalty_coeff": 0.99,
         "min_f1_threshold": 0.8,

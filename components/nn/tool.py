@@ -87,7 +87,7 @@ def pruning(
     top_indices = sorted_indices[:keep_num]
     pruned_neigh_nodes = [neigh_nodes[idx] for idx in top_indices]
 
-    # # 剪枝统计（便于调试）
+    # # # 剪枝统计（便于调试）
     # print(
     #     f"📌 剪枝统计：原始={num_neigh} | 10%={keep_num_by_p} | 最终保留={keep_num}"
     # )

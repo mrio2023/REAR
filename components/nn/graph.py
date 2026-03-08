@@ -1,6 +1,6 @@
-
 import pandas as pd
 import numpy as np
+import random
 
 
 class Graph:
@@ -142,12 +142,12 @@ class Graph:
 
     def sampleTrajectory(self, node: str, maxlen: int):
         """
-        核心采样逻辑：基于邻居拓展采样社区内节点（控制长度，避免梯度爆炸）
+        随机游走采样（优先选无重复节点，无则选重复节点）
         Args:
             node: 起始节点（用于匹配所属hacker社区）
             maxlen: 采样最大长度（核心控制，防止节点数过多）
         Returns:
-            采样后的轨迹列表（长度≤maxlen，仅包含社区内节点）
+            采样后的轨迹列表（长度≤maxlen，优先无重复，无则选重复）
         """
         # 提前构建addr2tag映射（避免重复查询df）
         if not hasattr(self, "_addr2tag"):
@@ -171,32 +171,37 @@ class Graph:
         if not community_nodes:
             return tra
 
-        # ========== 核心采样逻辑：邻居拓展+社区过滤+长度控制 ==========
-        # 已采样的节点（去重）
-        sampled_nodes = set(tra)
-        # 待采样的候选节点（初始为起始节点的邻居）
-        candidate_nodes = self.getSingleNodeNeighbor(node)
+        # ========== 核心：优先无重复节点，无则选重复节点 ==========
+        # 已访问节点集合（用于判断是否重复）
+        visited_nodes = set(tra)
+        # 当前游走节点
+        current_node = node
 
-        # 循环采样，直到达到maxlen或无候选节点
-        while len(tra) < maxlen and candidate_nodes:
-            # 筛选候选节点：属于社区 + 未被采样过
-            valid_candidates = [n for n in candidate_nodes if n in community_nodes and n not in sampled_nodes]
-            
-            if not valid_candidates:
-                # 无有效候选，终止采样
-                break
-            
-            # 采样1个节点（可改为随机采样/度数优先采样，这里默认取第一个）
-            # 【可选：随机采样】import random; selected = random.choice(valid_candidates)
-            selected = valid_candidates[0]
-            
-            # 添加到轨迹
-            tra.append(selected)
-            sampled_nodes.add(selected)
-            
-            # 更新候选节点：新增当前节点的邻居（拓展1-hop）
-            new_neighbors = self.getSingleNodeNeighbor(selected)
-            candidate_nodes = list(set(candidate_nodes + new_neighbors))  # 去重
+        # 循环采样，直到达到maxlen
+        while len(tra) < maxlen:
+            # 1. 获取当前节点的所有社区内邻居
+            neighbors = self.getSingleNodeNeighbor(current_node)
+            all_candidates = [n for n in neighbors if n in community_nodes]
+
+            if not all_candidates:
+                break  # 无社区内邻居，终止游走
+
+            # 2. 拆分未访问/已访问候选节点
+            unvisited_candidates = [n for n in all_candidates if n not in visited_nodes]
+            visited_candidates = [n for n in all_candidates if n in visited_nodes]
+
+            # 3. 核心逻辑：有未访问节点就必选，没有才选已访问的
+            if unvisited_candidates:
+                # 有未访问节点 → 随机选一个未访问的
+                selected_node = random.choice(unvisited_candidates)
+                visited_nodes.add(selected_node)  # 标记为已访问
+            else:
+                # 无未访问节点 → 随机选一个已访问的
+                selected_node = random.choice(visited_candidates)
+
+            # 4. 更新轨迹和当前节点
+            tra.append(selected_node)
+            current_node = selected_node
 
         # 最终兜底：确保长度不超过maxlen
         return tra[:maxlen]
