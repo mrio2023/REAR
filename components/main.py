@@ -74,7 +74,7 @@ DATASET_CONFIGS = {
         # 其他参数
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 10,
+        "maxLen": 15,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -164,5 +164,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
-    dataset_list = ["elliptic"]
+    dataset_list = ["ibm"]
     final_results = train_all_datasets(dataset_list, seed=2026)
