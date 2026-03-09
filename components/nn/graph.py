@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import random
-
+from sklearn.metrics.pairwise import cosine_similarity
 
 class Graph:
     def __init__(self, dfnode, dffeature, dfhacker, dfedge):
@@ -170,38 +170,91 @@ class Graph:
         community_nodes = self.community_seeds.get(name_tag, set())
         if not community_nodes:
             return tra
+        tra=community_nodes
 
-        # ========== 核心：优先无重复节点，无则选重复节点 ==========
-        # 已访问节点集合（用于判断是否重复）
-        visited_nodes = set(tra)
-        # 当前游走节点
-        current_node = node
+        # # ========== 核心：优先无重复节点，无则选重复节点 ==========
+        # # 已访问节点集合（用于判断是否重复）
+        # visited_nodes = set(tra)
+        # # 当前游走节点
+        # current_node = node
 
-        # 循环采样，直到达到maxlen
-        while len(tra) < maxlen:
-            # 1. 获取当前节点的所有社区内邻居
-            neighbors = self.getSingleNodeNeighbor(current_node)
-            all_candidates = [n for n in neighbors if n in community_nodes]
+        # # 循环采样，直到达到maxlen
+        # while len(tra) < maxlen:
+        #     # 1. 获取当前节点的所有社区内邻居
+        #     neighbors = self.getSingleNodeNeighbor(current_node)
+        #     all_candidates = [n for n in neighbors if n in community_nodes]
 
-            if not all_candidates:
-                break  # 无社区内邻居，终止游走
+        #     if not all_candidates:
+        #         break  # 无社区内邻居，终止游走
 
-            # 2. 拆分未访问/已访问候选节点
-            unvisited_candidates = [n for n in all_candidates if n not in visited_nodes]
-            visited_candidates = [n for n in all_candidates if n in visited_nodes]
+        #     # 2. 拆分未访问/已访问候选节点
+        #     unvisited_candidates = [n for n in all_candidates if n not in visited_nodes]
+        #     visited_candidates = [n for n in all_candidates if n in visited_nodes]
 
-            # 3. 核心逻辑：有未访问节点就必选，没有才选已访问的
-            if unvisited_candidates:
-                # 有未访问节点 → 随机选一个未访问的
-                selected_node = random.choice(unvisited_candidates)
-                visited_nodes.add(selected_node)  # 标记为已访问
-            else:
-                # 无未访问节点 → 随机选一个已访问的
-                selected_node = random.choice(visited_candidates)
+        #     # 3. 核心逻辑：有未访问节点就必选，没有才选已访问的
+        #     if unvisited_candidates:
+        #         # 有未访问节点 → 随机选一个未访问的
+        #         selected_node = random.choice(unvisited_candidates)
+        #         visited_nodes.add(selected_node)  # 标记为已访问
+        #     else:
+        #         # 无未访问节点 → 随机选一个已访问的
+        #         selected_node = random.choice(visited_candidates)
 
-            # 4. 更新轨迹和当前节点
-            tra.append(selected_node)
-            current_node = selected_node
+        #     # 4. 更新轨迹和当前节点
+        #     tra.append(selected_node)
+        #     current_node = selected_node
 
-        # 最终兜底：确保长度不超过maxlen
-        return tra[:maxlen]
+        # # 最终兜底：确保长度不超过maxlen
+        return list(set(tra))
+
+    def expand_community_by_similarity(
+        self,
+        community_nodes: list,
+        sim_threshold: float = 0.6,
+        max_expand_num: int = 4,  # 新增：最大扩展数（固定4）
+        min_expand_num: int = 1   # 新增：最小扩展数（固定1）
+    ) -> list:
+        """
+        基于社区中心嵌入相似度扩展节点：
+        - 筛选与社区中心嵌入相似度≥0.8的周边节点
+        - 扩展数量：强制1~4个（删除比例逻辑）
+        """
+        # 空值/边界处理
+        if not community_nodes or self.embed_dim == 0:
+            return community_nodes.copy()
+
+        # 计算社区中心嵌入（平均嵌入）
+        community_embeds = self.nodesEmbed(community_nodes)
+        center_embed = np.mean(community_embeds, axis=0).reshape(1, -1)
+
+        # 获取社区所有周边邻居（去重+排除已在社区的节点）
+        community_set = set(community_nodes)
+        all_neighbors = self.getNodesNeigh(community_nodes)
+        candidate_nodes = [n for n in all_neighbors if n not in community_set]
+        if not candidate_nodes:
+            return community_nodes.copy()
+
+        # 计算候选节点与中心嵌入的相似度
+        candidate_embeds = self.nodesEmbed(candidate_nodes)
+        sim_scores = cosine_similarity(center_embed, candidate_embeds)[0]
+
+        # 筛选相似度≥阈值的节点
+        high_sim_indices = np.where(sim_scores >= sim_threshold)[0]
+        high_sim_nodes = [candidate_nodes[i] for i in high_sim_indices]
+        if not high_sim_nodes:
+            return community_nodes.copy()
+
+        # ========== 核心修改：删除ratio逻辑，强制1~4个扩展数 ==========
+        # 按相似度降序排列
+        sorted_indices = high_sim_indices[np.argsort(sim_scores[high_sim_indices])[::-1]]
+        # 实际可扩展数 = 取高相似度节点数 和 最大扩展数的较小值，且不小于最小扩展数
+        actual_expand_num = min(len(sorted_indices), max_expand_num)
+        actual_expand_num = max(actual_expand_num, min_expand_num)
+        # 取前N个高相似度节点
+        selected_indices = sorted_indices[:actual_expand_num]
+        selected_nodes = [candidate_nodes[i] for i in selected_indices]
+
+        # 合并扩展后的社区节点
+        expanded_community = community_nodes + selected_nodes
+        print("增长了", len(selected_nodes), "点")
+        return list(set(expanded_community))  # 去重

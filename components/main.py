@@ -14,39 +14,39 @@ os.chdir(sci_dir)
 # # 公式：G_t = r_t + γ*r_{t+1} + γ²*r_{t+2} + ... + γ^(T-t-1)*r_{T-1}
 # # 代码位置：Expander.__init__ / trainReward折扣奖励计算
 # # 调节：γ↑（0.99）→ 重视长期奖励；γ↓（0.9）→ 只看近期
-# self.gamma = gamma  
+# self.gamma = gamma
 
 # # maxLen（最大轨迹长度）
 # # 公式：len(tra_nodes) ≤ maxLen
 # # 代码位置：Expander.__init__ / add_node长度判断
 # # 调节：maxLen↓→P↑R↓；maxLen↑→P↓R↑
-# self.maxLen = maxLen  
+# self.maxLen = maxLen
 
 # # ===================== F1奖励核心参数 =====================
 # # f1_base_weight（F1基础权重）
 # # 公式：base_reward = biased_f1 * w_base  或  base_reward = -(1-curr_f1)*w_base
 # # 代码位置：trainReward奖励计算
 # # 调节：w_base↑→奖励放大；w_base↓→奖励缩小
-# self.f1_base_weight = f1_base_weight  
+# self.f1_base_weight = f1_base_weight
 
 # # p_bias（精度倾斜系数）
 # # 公式：biased_f1 = curr_f1*(1+p_bias) （当curr_p < curr_r时）
 # #       biased_f1 = curr_f1            （当curr_p ≥ curr_r时）
 # # 代码位置：trainReward奖励计算
 # # 调节：p_bias↑→P↑R↓；p_bias↓→P↓R↑；p_bias<0→偏向Recall
-# self.p_bias = p_bias  
+# self.p_bias = p_bias
 
 # # min_f1_threshold（最小F1阈值）
 # # 公式：if curr_f1 > pre_f1 and curr_f1 > θ → 正奖励；else → 负奖励
 # # 代码位置：trainReward奖励判断
 # # 调节：θ↑→模型更挑剔（P↑R↓）；θ↓→模型更宽松（P↓R↑）
-# self.min_f1_threshold = min_f1_threshold  
+# self.min_f1_threshold = min_f1_threshold
 
 # # len_penalty_coeff（长度惩罚系数）
 # # 公式：base_reward *= α^(curr_len - true_len) （curr_len > true_len时）
 # # 代码位置：trainReward长度惩罚计算
 # # 调节：α↓（0.7）→ 惩罚重（P↑R↓）；α↑（0.99）→ 惩罚轻（P↓R↑）
-# self.len_penalty_coeff = len_penalty_coeff  
+# self.len_penalty_coeff = len_penalty_coeff
 
 # # ===================== 损失函数 =====================
 # # loss（策略梯度损失）
@@ -68,14 +68,13 @@ DATASET_CONFIGS = {
         "min_f1_threshold": 0,
         "len_penalty_coeff": 0.9,
         # 训练层面：限制扩张+充分训练
-        "maxTraLen": 16,
         "gamma": 0.99,
         "seedNum": 40,
         "epoch": 50,
         # 其他参数
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 20,
+        "maxLen": 10,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -86,13 +85,12 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 2,
         "expand_hop": 2,
         "min_community_size": 2,
-        "maxTraLen": 16,
-        "p_bias": 10,
+        "p_bias": 20,
         "len_penalty_coeff": 0.99,
         "min_f1_threshold": 0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 30,
+        "epoch": 40,
         # 其他参数
         "f1_base_weight": 1.0,
         "lr": 1e-4,
@@ -107,10 +105,9 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 2,
         "expand_hop": 2,
         "min_community_size": 5,
-        "maxTraLen": 16,
         "p_bias": 0.3,
         "len_penalty_coeff": 0.9,
-        "min_f1_threshold": 0.2,
+        "min_f1_threshold": 0,
         "gamma": 0.99,
         "seedNum": 40,
         "epoch": 30,
@@ -161,17 +158,6 @@ def train_all_datasets(datasets: list, seed: int = 2026):
     for dfname in datasets:
         all_results[dfname] = train_single_dataset(dfname, seed=seed)
 
-    # 汇总打印结果
-    print(f"\n{'='*70}\n📊 所有数据集训练结果汇总\n{'='*70}")
-    print(f"{'数据集':10s} | {'P':6s} | {'R':6s} | {'F1':6s}")
-    print(f"{'-'*70}")
-    for dfname, metrics in all_results.items():
-        if metrics:
-            print(
-                f"{dfname:10s} | {metrics['avg_precision']:.4f} | {metrics['avg_recall']:.4f} | {metrics['avg_f1']:.4f}"
-            )
-        else:
-            print(f"{dfname:10s} | {'失败':6s} | {'失败':6s} | {'失败':6s}")
 
     return all_results
 
