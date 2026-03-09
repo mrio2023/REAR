@@ -210,51 +210,75 @@ class Graph:
     def expand_community_by_similarity(
         self,
         community_nodes: list,
-        sim_threshold: float = 0.6,
-        max_expand_num: int = 4,  # 新增：最大扩展数（固定4）
-        min_expand_num: int = 1   # 新增：最小扩展数（固定1）
+        sim_threshold: float = 0.5,
+        include_two_hop: bool = True,
+        max_candidates: int = 200,
+        min_similarity_decay: float = 0.05,
     ) -> list:
         """
-        基于社区中心嵌入相似度扩展节点：
-        - 筛选与社区中心嵌入相似度≥0.8的周边节点
-        - 扩展数量：强制1~4个（删除比例逻辑）
+        动态贪心扩展：
+        - 候选节点（一阶+二阶）按与社区中心嵌入的相似度降序排序
+        - 依次尝试添加，如果添加后社区平均相似度下降不超过阈值，则保留；否则停止
         """
-        # 空值/边界处理
         if not community_nodes or self.embed_dim == 0:
             return community_nodes.copy()
 
-        # 计算社区中心嵌入（平均嵌入）
+        # 当前社区的中心嵌入和平均相似度
         community_embeds = self.nodesEmbed(community_nodes)
         center_embed = np.mean(community_embeds, axis=0).reshape(1, -1)
+        cur_avg_sim = np.mean(cosine_similarity(community_embeds, center_embed))
 
-        # 获取社区所有周边邻居（去重+排除已在社区的节点）
         community_set = set(community_nodes)
-        all_neighbors = self.getNodesNeigh(community_nodes)
-        candidate_nodes = [n for n in all_neighbors if n not in community_set]
-        if not candidate_nodes:
+        all_neighbors = set()
+
+        # 获取一阶邻居
+        first_hop = set()
+        for node in community_nodes:
+            first_hop.update(self.getSingleNodeNeighbor(node))
+        first_hop -= community_set
+        all_neighbors.update(first_hop)
+
+        # 获取二阶邻居（可选）
+        if include_two_hop:
+            second_hop = set()
+            for node in first_hop:
+                second_hop.update(self.getSingleNodeNeighbor(node))
+            second_hop -= community_set
+            second_hop -= first_hop
+            all_neighbors.update(second_hop)
+
+        if not all_neighbors:
             return community_nodes.copy()
+
+        # 限制候选节点数量
+        candidate_nodes = list(all_neighbors)
+        if len(candidate_nodes) > max_candidates:
+            candidate_nodes = random.sample(candidate_nodes, max_candidates)
 
         # 计算候选节点与中心嵌入的相似度
         candidate_embeds = self.nodesEmbed(candidate_nodes)
         sim_scores = cosine_similarity(center_embed, candidate_embeds)[0]
 
-        # 筛选相似度≥阈值的节点
+        # 筛选高于阈值的节点，并按相似度降序排序
         high_sim_indices = np.where(sim_scores >= sim_threshold)[0]
-        high_sim_nodes = [candidate_nodes[i] for i in high_sim_indices]
-        if not high_sim_nodes:
+        if len(high_sim_indices) == 0:
             return community_nodes.copy()
 
-        # ========== 核心修改：删除ratio逻辑，强制1~4个扩展数 ==========
-        # 按相似度降序排列
         sorted_indices = high_sim_indices[np.argsort(sim_scores[high_sim_indices])[::-1]]
-        # 实际可扩展数 = 取高相似度节点数 和 最大扩展数的较小值，且不小于最小扩展数
-        actual_expand_num = min(len(sorted_indices), max_expand_num)
-        actual_expand_num = max(actual_expand_num, min_expand_num)
-        # 取前N个高相似度节点
-        selected_indices = sorted_indices[:actual_expand_num]
-        selected_nodes = [candidate_nodes[i] for i in selected_indices]
+        sorted_nodes = [candidate_nodes[i] for i in sorted_indices]
 
-        # 合并扩展后的社区节点
-        expanded_community = community_nodes + selected_nodes
-        print("增长了", len(selected_nodes), "点")
-        return list(set(expanded_community))  # 去重
+        # 贪心添加节点
+        expanded = community_nodes.copy()
+        for node in sorted_nodes:
+            expanded.append(node)
+            new_embeds = self.nodesEmbed(expanded)
+            new_center = np.mean(new_embeds, axis=0).reshape(1, -1)
+            new_avg_sim = np.mean(cosine_similarity(new_embeds, new_center))
+            if new_avg_sim < cur_avg_sim - min_similarity_decay:
+                expanded.pop()  # 回退
+                break
+            else:
+                cur_avg_sim = new_avg_sim  # 更新当前平均相似度
+
+        print(f"动态扩展：新增 {len(expanded)-len(community_nodes)} 点")
+        return expanded
