@@ -25,7 +25,8 @@ class Starter:
             for tag, addr_set in test_g.community_seeds.items()
             if isinstance(addr_set, (set, list)) and len(addr_set) > 0
         ]
-        print("有",len(true_coms),"个社区")
+        print("有", len(true_coms), "个社区")
+
         # 生成测试种子
         test_seeds = {}
         for name_tag, addr_list in true_coms:
@@ -47,7 +48,7 @@ class Starter:
             all_seeds_flat.extend(seeds)
             community_map.extend([name_tag] * len(seeds))
 
-        # 批量推理
+        # 批量推理得到初始预测
         pred_coms_flat = []
         if all_seeds_flat:
             with torch.no_grad():
@@ -60,17 +61,32 @@ class Starter:
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred_before[community_map[idx]].update(valid_nodes)
 
-        # 扩展后预测结果
-        community_pred_after = {tag: set() for tag in test_seeds.keys()}
+        # ========== 修改点：用模型迭代扩展代替相似度扩展 ==========
+        community_pred_after = {}
+        max_iter = 2  # 迭代次数，可根据需要调整（或从 self.params 获取）
         for name_tag in test_seeds.keys():
-            pred_nodes_before = list(community_pred_before[name_tag])
-            if len(pred_nodes_before) == 0:
+            current_com = set(community_pred_before[name_tag])
+            if not current_com:
                 community_pred_after[name_tag] = set()
                 continue
-            pred_nodes_after = test_g.expand_community_by_similarity(
-                pred_nodes_before
-            )
-            community_pred_after[name_tag] = set(pred_nodes_after)
+
+            # 迭代扩展
+            for _ in range(max_iter):
+                # 以当前社区所有节点作为种子（去重后转为列表）
+                seeds = list(current_com)
+                with torch.no_grad():
+                    # 注意：sample_bs_trajectories 接收的是列表，返回对应长度的预测列表
+                    preds, _ = expander.sample_bs_trajectories(seeds)
+                new_nodes = set()
+                for p in preds:
+                    new_nodes.update([n for n in p if n != "Stp"])
+                # 如果没有新增节点，提前停止
+                if new_nodes.issubset(current_com):
+                    break
+                current_com.update(new_nodes)
+
+            community_pred_after[name_tag] = current_com
+        # ==========================================================
 
         # 计算指标
         metrics_before = {"precision": [], "recall": [], "f1": []}
@@ -126,7 +142,7 @@ class Starter:
 
         # 打印结果
         print("\n" + "=" * 80)
-        print("📊 扩展前后指标对比（相似度≥0.8，扩展比例10%）")
+        print("📊 扩展前后指标对比（模型迭代扩展）")
         print("=" * 80)
         print(
             f"扩展前 | P: {avg_metrics['before_avg_precision']} | R: {avg_metrics['before_avg_recall']} | F1: {avg_metrics['before_avg_f1']} (±{avg_metrics['before_std_f1']})"

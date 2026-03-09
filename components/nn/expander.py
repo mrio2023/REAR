@@ -253,14 +253,6 @@ class Expander:
         return tra_nodes, tra_logps
 
     def trainReward(self, seeds: List[int], true_coms):
-        """
-        核心训练逻辑：
-        - 采样轨迹
-        - 计算每步奖励（改进版）
-        - 标准化奖励
-        - 计算策略梯度损失 + 熵正则
-        - 梯度裁剪并更新
-        """
         self.model.train()
 
         selected_nodes, logps = self.sample_bs_trajectories(seeds)
@@ -289,9 +281,10 @@ class Expander:
         print(f"Batch Metrics: P={batch_precision:.4f}, R={batch_recall:.4f}, F1={batch_f1:.4f}, AvgExtLen={avg_ext_len:.2f}")
 
         # ---------- 改进的奖励计算 ----------
+        target_recall = 0.8  # 可调整为动态值
         rewards_list = []
         for idx, (com, true_com) in enumerate(zip(selected_nodes, true_coms)):
-            temp_com = [com[0]]               # 当前扩展集合（去重？这里保留原始顺序但用于F1计算）
+            temp_com = [com[0]]
             true_com_set = set(true_com)
             true_com_len = len(true_com_set)
             repeat_count = 0
@@ -304,27 +297,33 @@ class Expander:
                     step_rewards.append(-self.repeat_penalty_coeff * repeat_count)
                     continue
 
-                # 停止动作：奖励基于当前F1（高F1得正，低得负）
                 if node == "Stp":
-                    curr_f1 = eval_f1(temp_com, true_com_set)
-                    # 映射到[-1,1]：F1=0 -> -1, F1=1 -> 1
-                    stop_reward = 2 * curr_f1 - 1
+                    # 停止奖励：基于当前召回与目标召回的差距
+                    curr_r = len(set(temp_com) & true_com_set) / true_com_len
+                    stop_reward = (curr_r - target_recall) * 5  # 缩放因子可调
                     step_rewards.append(stop_reward)
                     continue
 
-                # 普通节点：计算F1增量
-                pre_f1 = eval_f1(temp_com, true_com_set)
+                # 添加节点前的p, r
+                pre_intersect = len(set(temp_com) & true_com_set)
+                pre_p = pre_intersect / len(set(temp_com)) if temp_com else 0.0
+                pre_r = pre_intersect / true_com_len
+
                 temp_com.append(node)
-                curr_f1 = eval_f1(temp_com, true_com_set)
-                f1_increment = curr_f1 - pre_f1
 
-                # 基础奖励 = 增量 * 缩放因子（可为负）
-                base_reward = f1_increment * self.f1_base_weight  # 例如100
+                curr_intersect = len(set(temp_com) & true_com_set)
+                curr_p = curr_intersect / len(set(temp_com))
+                curr_r = curr_intersect / true_com_len
 
-                # 长度惩罚：如果当前长度超过真实长度，对奖励打折
-                curr_len = len(temp_com)
-                if curr_len > true_com_len:
-                    penalty = self.len_penalty_coeff ** (curr_len - true_com_len)
+                recall_inc = curr_r - pre_r
+                precision_inc = curr_p - pre_p
+
+                # 加权奖励
+                base_reward = (recall_inc * self.r_bias + precision_inc * self.p_bias) * self.f1_base_weight
+
+                # 长度惩罚
+                if len(temp_com) > true_com_len:
+                    penalty = self.len_penalty_coeff ** (len(temp_com) - true_com_len)
                     base_reward *= penalty
 
                 step_rewards.append(base_reward)
@@ -347,15 +346,13 @@ class Expander:
             rewards_padded[i, :len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
-        # ---------- 标准化奖励（降低方差） ----------
+        # 可选：去掉标准化，或保留但使用更稳健的baseline
         mask = (torch.arange(max_len_pad, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
-        # 只对有效步的奖励进行标准化
-        valid_rewards = rewards[mask.bool()]
-        if valid_rewards.numel() > 1:
-            mean = valid_rewards.mean()
-            std = valid_rewards.std() + 1e-8
-            rewards = (rewards - mean) / std
-        # 标准化后仍保持原mask位置，未填充部分为0（已初始化为0）
+        # 这里暂时去掉标准化，直接使用原始奖励
+        # 如果要去掉，注释下面三行
+        # valid_rewards = rewards[mask.bool()]
+        # if valid_rewards.numel() > 1:
+        #     rewards = (rewards - valid_rewards.mean()) / (valid_rewards.std() + 1e-8)
 
         # 构建log_probs张量
         logps_padded = []
@@ -367,21 +364,9 @@ class Expander:
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
-        # ---------- 策略梯度损失 ----------
+        # 策略梯度损失
         pg_loss = -(rewards.detach() * logps * mask).sum()
-
-        # ---------- 熵正则（可选） ----------
-        # 由于我们未保存每一步的熵，这里简单近似：使用平均熵（需要在采样时记录）
-        # 为简化，可以重新计算一遍logits来获取熵，但效率低。我们可以在sample_actions中返回熵，
-        # 并在此处累加。但为了不破坏接口，我们暂时省略熵正则，或采用另一种方式：
-        # 使用log_probs的方差近似？但不如直接添加熵项。
-        # 我们修改sample_bs_trajectories，使其同时返回熵列表。
-        # 这里假设我们已在内部保存了熵，实际实现中可在sample_bs_trajectories中收集熵并返回。
-        # 为完整起见，我们在此添加熵损失（需先修改sample_bs_trajectories返回熵）。
-        # 因篇幅，此处暂不实现熵正则，但建议加入。
-
-        # 总损失
-        loss = pg_loss  # 可加上 entropy_loss
+        loss = pg_loss  # 可加入熵正则
 
         print(f"Loss Adjust | Base Loss: {pg_loss.item():.4f}")
 

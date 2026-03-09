@@ -62,7 +62,7 @@ DATASET_CONFIGS = {
         # 数据层面：减少无关节点干扰
         "normal_node_ratio": 3,
         "expand_hop": 2,
-        "min_community_size": 1,
+        "min_community_size": 7,
         # 奖励层面：纯精度惩罚
         "p_bias": 0,
         "min_f1_threshold": 0,
@@ -164,5 +164,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
-    dataset_list = ["ibm"]
+    dataset_list = ["elliptic2_full","elliptic","ibm"]
     final_results = train_all_datasets(dataset_list, seed=2026)
