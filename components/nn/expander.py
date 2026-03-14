@@ -1,4 +1,4 @@
-from typing import Union, Optional, List, Set
+from typing import Optional, List
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,18 +15,17 @@ class Expander:
         device: Optional[torch.device],
         # 基础RL参数
         gamma: float,
-        # F1奖励核心参数（外部传入，方便调试）
-        f1_base_weight: float,  # F1基础权重（现用于缩放增量）
-        p_bias: float,          # 精度倾斜系数
-        len_penalty_coeff: float,  # 长度惩罚系数
-        min_f1_threshold: float,   # 最小F1阈值（暂未使用）
-        r_bias: float = 1,          # 召回倾斜系数
-        repeat_penalty_coeff: float = 0.5,  # 重复选点惩罚系数
-        # 新增参数
-        entropy_coeff: float = 0.01,  # 熵正则系数
-        grad_norm: float = 1.0,       # 梯度裁剪阈值（调小）
-        target_recall: float = 0.8,   # 目标召回率，用于停止奖励
-        stop_reward_scale: float = 2.0, # 停止奖励缩放因子
+        # F1奖励核心参数
+        f1_base_weight: float,
+        p_bias: float,
+        r_bias: float,
+        repeat_penalty_coeff: float,
+        # 正则与优化参数
+        entropy_coeff: float,
+        grad_norm: float,
+        # 停止奖励参数
+        target_recall: float,
+        stop_reward_scale: float,
     ):
         self.graph = graph
         self.model = model
@@ -38,35 +37,48 @@ class Expander:
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
         self.r_bias = r_bias
-        self.min_f1_threshold = min_f1_threshold
-        self.len_penalty_coeff = len_penalty_coeff
         self.repeat_penalty_coeff = repeat_penalty_coeff
         self.entropy_coeff = entropy_coeff
         self.grad_norm = grad_norm
         self.target_recall = target_recall
         self.stop_reward_scale = stop_reward_scale
 
-        print(f"self.r_bias {r_bias}")
-        print(f"maxlen: {maxLen}")
-        print(f"entropy_coeff: {entropy_coeff}, grad_norm: {grad_norm}, target_recall: {target_recall}")
+        print(f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight}")
+        print(f"p_bias={p_bias}, r_bias={r_bias}, repeat_penalty={repeat_penalty_coeff}")
+        print(f"entropy_coeff={entropy_coeff}, grad_norm={grad_norm}")
+        print(f"target_recall={target_recall}, stop_reward_scale={stop_reward_scale}")
 
     def sample_actions(self, logits, training=True):
         """
         根据模式采样动作：
         - 训练模式：按概率采样（探索）
         - 评估模式：贪心选择
-        返回：动作列表、对数概率列表、熵列表（仅训练模式有效）
+        参数：
+            logits: 列表，每个元素是一个一维张量 [num_actions]
+            training: 是否训练模式
+        返回：
+            actions: 列表，每个元素是采样到的动作（整数或"Stp"）
+            log_probs: 列表，每个元素是动作的对数概率张量
+            entropies: 列表，每个元素是动作分布的熵张量
         """
         actions, log_probs, entropies = [], [], []
-        for batch_logits in logits:
+
+        for i, batch_logits in enumerate(logits):
             if batch_logits is None or batch_logits.numel() == 0:
-                # 无候选时默认停止
+                print(f"[WARN] Empty logits at batch index {i}，视为停止")
                 actions.append("Stp")
                 log_probs.append(torch.tensor(0.0, device=self.device))
                 entropies.append(torch.tensor(0.0, device=self.device))
                 continue
 
+            # 防御性处理 NaN 和极端值
+            if torch.isnan(batch_logits).any():
+                print(f"[ERROR] NaN detected in logits at batch index {i}")
+                batch_logits = torch.nan_to_num(batch_logits, nan=0.0)
+            batch_logits = torch.clamp(batch_logits, min=-20, max=20)
+
             dist = torch.distributions.Categorical(logits=batch_logits)
+
             if training:
                 action = dist.sample()
             else:
@@ -75,10 +87,12 @@ class Expander:
             log_prob = dist.log_prob(action)
             entropy = dist.entropy()
 
+            # 假设停止动作是最后一个动作
             if action == len(dist.probs) - 1:
                 actions.append("Stp")
             else:
                 actions.append(action.item())
+
             log_probs.append(log_prob)
             entropies.append(entropy)
 
@@ -87,7 +101,7 @@ class Expander:
     def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
         """
         准备模型输入：
-        - 若无邻居，则候选集为空，仅保留停止动作（不再填充虚拟节点）
+        - 若无邻居，则候选集为空，仅保留停止动作
         - 返回：种子嵌入、轨迹节点嵌入、indptr、候选节点列表
         """
         t_tra_vector, t_seed_vector, indptr, choices = [], [], [], []
@@ -100,11 +114,10 @@ class Expander:
 
             # --- 空邻居处理：无候选，仅停止动作 ---
             if len(unique_neigh) == 0:
-                # 仅添加当前节点用于停止特征计算
                 t_tra_vector.append(tra_vector[i].unsqueeze(0))
                 t_seed_vector.append(seed_vector[i].unsqueeze(0))
-                choices.append([])  # 空候选列表
-                indptr.append((offset, offset + 1, offset))  # 候选区间为空，停止logit由模型单独处理
+                choices.append([])
+                indptr.append((offset, offset + 1, offset))
                 offset += 1
                 continue
 
@@ -155,6 +168,8 @@ class Expander:
         else:
             seed_embed = torch.cat(t_seed_vector, dim=0)
             tra_embed = torch.cat(t_tra_vector, dim=0)
+            if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
+                print("[ERROR] NaN in input embeddings!")
 
         return seed_embed, tra_embed, np.array(indptr), choices
 
@@ -165,10 +180,13 @@ class Expander:
             or len(tra_nodes[index]) >= self.maxLen
             or (new_node != "Stp" and new_node in tra_sets[index])
         ):
+            # 重复节点不标记 done，允许继续，但返回 None
+            if new_node != "Stp" and new_node in tra_sets[index]:
+                return None
             self.done[index] = True
             return None
         tra_nodes[index].append(new_node)
-        tra_sets[index].add(new_node)  # 维护集合加速查重
+        tra_sets[index].add(new_node)
         embed = self.graph.singleNodeEmbed(new_node)
         embed = (
             torch.tensor(embed, dtype=torch.float32, device=self.device)
@@ -198,9 +216,9 @@ class Expander:
 
         tra_vector = seed_vector.clone()
         tra_nodes = [[s] for s in seeds]
-        tra_sets = [{s} for s in seeds]  # 用集合加速查重
+        tra_sets = [{s} for s in seeds]
         tra_logps = [[] for _ in range(len(seeds))]
-        tra_entropies = [[] for _ in range(len(seeds))]  # 新增：记录每一步的熵
+        tra_entropies = [[] for _ in range(len(seeds))]
         self.done = [False] * len(seeds)
         step = 0
 
@@ -233,45 +251,20 @@ class Expander:
                     tra_entropies[orig_idx].append(entropy)
                     continue
 
-                # 正常情况
                 if ac == "Stp" or ac >= len(batch_candidates[j]):
                     self.add_node("Stp", tra_nodes, tra_sets, orig_idx)
                     tra_logps[orig_idx].append(logp)
                     tra_entropies[orig_idx].append(entropy)
                 else:
                     selected_node = batch_candidates[j][ac]
-                    # 重复节点：给予惩罚但仍继续（不强制停止）
-                    if selected_node in active_tra_sets[j]:
-                        # 给予负奖励，但不标记done，允许后续继续选择
-                        # 这里不添加节点，只记录惩罚（在trainReward中处理）
-                        # 为了保持轨迹长度一致，我们仍需记录logp和entropy
-                        # 但节点不加入轨迹，所以需要特殊标记，在奖励计算中处理
-                        # 简化：仍调用add_node但会触发done（因为重复），我们修改add_node使其不标记done
-                        # 但为清晰，此处不添加节点，直接记录惩罚动作
-                        # 我们修改策略：重复节点允许选择，但给予惩罚；现在仍添加节点（但会触发重复惩罚），
-                        # 但为了简化，我们让add_node返回None但done不标记？需调整。
-                        # 先保持原有逻辑：重复节点直接停止（需修改）
-                        # 为了不停止，我们修改add_node：若重复且不是Stp，返回None但不标记done。
-                        # 但后续需要记录惩罚。为简化，我们在trainReward中处理重复惩罚时不依赖此处标记，
-                        # 而是通过检查节点是否已存在来计算重复惩罚。因此这里仍可尝试添加节点，
-                        # 但add_node应修改为不标记done，只返回None。
-                        # 我们将在add_node中修改。
-                        newvec = self.add_node(selected_node, tra_nodes, tra_sets, orig_idx)
-                        if newvec is not None:
-                            tra_vector[orig_idx] = self.vecpool(
-                                tra_vector[orig_idx], newvec, len(tra_nodes[orig_idx])
-                            )
-                        # 即使重复，也记录logp和entropy（因为动作被采样了）
-                        tra_logps[orig_idx].append(logp)
-                        tra_entropies[orig_idx].append(entropy)
-                    else:
-                        newvec = self.add_node(selected_node, tra_nodes, tra_sets, orig_idx)
-                        if newvec is not None:
-                            tra_vector[orig_idx] = self.vecpool(
-                                tra_vector[orig_idx], newvec, len(tra_nodes[orig_idx])
-                            )
-                            tra_logps[orig_idx].append(logp)
-                            tra_entropies[orig_idx].append(entropy)
+                    newvec = self.add_node(selected_node, tra_nodes, tra_sets, orig_idx)
+                    if newvec is not None:
+                        tra_vector[orig_idx] = self.vecpool(
+                            tra_vector[orig_idx], newvec, len(tra_nodes[orig_idx])
+                        )
+                    # 无论是否重复，都记录logp和entropy
+                    tra_logps[orig_idx].append(logp)
+                    tra_entropies[orig_idx].append(entropy)
             step += 1
 
         return tra_nodes, tra_logps, tra_entropies
@@ -322,7 +315,7 @@ class Expander:
                     continue  # 不加入节点，但继续循环
 
                 if node == "Stp":
-                    # 停止奖励：基于当前召回与目标召回的差距，缩放因子可调
+                    # 停止奖励：基于当前召回与目标召回的差距
                     curr_r = len(temp_set & true_com_set) / true_com_len
                     stop_reward = (curr_r - self.target_recall) * self.stop_reward_scale
                     step_rewards.append(stop_reward)
@@ -348,7 +341,6 @@ class Expander:
 
                 # 长度惩罚（线性更温和）
                 if len(temp_set) > true_com_len:
-                    # 改为线性惩罚：每超出1个单位，奖励乘以 (1 - 0.1*(超出长度))，最低0
                     penalty = max(1.0 - 0.1 * (len(temp_set) - true_com_len), 0.0)
                     base_reward *= penalty
 
@@ -375,15 +367,12 @@ class Expander:
         # 构建mask（有效步数 = 轨迹长度-1，因为种子无动作）
         mask = (torch.arange(max_len_pad, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
 
-        # ========== 奖励标准化 + 基线 ==========
-        # 计算有效奖励的均值作为基线，并标准化
-        valid_rewards = rewards[mask.bool()]
-        if valid_rewards.numel() > 1:
-            baseline = valid_rewards.mean()
-            rewards = rewards - baseline
-            # 标准化（可选）
-            # rewards = rewards / (valid_rewards.std() + 1e-8)
-        # =====================================
+        # # ========== 奖励标准化 + 基线 ==========
+        # valid_rewards = rewards[mask.bool()]
+        # if valid_rewards.numel() > 1:
+        #     baseline = valid_rewards.mean()
+        #     rewards = rewards - baseline
+        # # =====================================
 
         # 构建log_probs张量
         logps_padded = []
