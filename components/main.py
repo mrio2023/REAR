@@ -110,11 +110,11 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 5,  # 正常节点比例可能更高
         "expand_hop": 2,  # 控制子图大小
         "min_community_size": 5,  # 最小社区规模
-        "p_bias": 0.6,
+        "p_bias": 0.8,
         "r_bias": 1.0,
         "repeat_penalty_coeff": 0.5,
         "entropy_coeff": 0.01,
-        "grad_norm": 1.0,
+        "grad_norm": 10.0,
         "target_recall": 0.8,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
