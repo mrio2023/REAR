@@ -32,7 +32,7 @@ class Expander:
         self.optimizer = optimizer
         self.gamma = gamma
         self.maxLen = maxLen
-        self.device = device or torch.device("cpu")
+        self.device = device 
 
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
@@ -43,7 +43,7 @@ class Expander:
         self.target_recall = target_recall
         self.stop_reward_scale = stop_reward_scale
 
-        print(f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight}")
+        print(f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight},device={self.device}")
         print(f"p_bias={p_bias}, r_bias={r_bias}, repeat_penalty={repeat_penalty_coeff}")
         print(f"entropy_coeff={entropy_coeff}, grad_norm={grad_norm}")
         print(f"target_recall={target_recall}, stop_reward_scale={stop_reward_scale}")

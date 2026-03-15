@@ -58,10 +58,10 @@ class Starter:
 
         self.params = params
         # 设置默认值
-        self.params.setdefault("max_iter", 2)
+        self.params.setdefault("max_iter", 1)
 
     def eval_model(self, expander: Expander, test_g: Graph) -> Dict[str, float]:
-        """评估模型性能（已适配 sample_bs_trajectories 返回三个值）"""
+       
         expander.model.eval()
 
         true_coms: List[Tuple[str, List]] = [
