@@ -98,7 +98,7 @@ class PreprocessedDataLoader:
         else:
             print("✅ 训练与测试社区节点无重叠")
         print("=== 检查结束 ===\n")
-    def _load_data(self, outlier_threshold=3):
+    def _load_data(self, outlier_threshold=2):
         """读取边、社区、特征，并自动剔除大小异常的社区"""
         edges = []
         with open(self.ungraph_file, 'r') as f:

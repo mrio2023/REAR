@@ -125,6 +125,26 @@ DATASET_CONFIGS = {
         "maxLen": 12,  # 可能需更长路径
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
+    },"dgraph_t": {
+        "dfname": "dgraph",
+        "normal_node_ratio": 5,  # 正常节点比例可能更高
+        "expand_hop": 2,  # 控制子图大小
+        "min_community_size": 5,  # 最小社区规模
+        "p_bias": 1.0,
+        "r_bias": 1.0,
+        "repeat_penalty_coeff": 0.5,
+        "entropy_coeff": 0.01,
+        "grad_norm": 10.0,
+        "target_recall": 0.5,
+        "stop_reward_scale": 2.0,
+        "gamma": 0.99,
+        "seedNum": 40,
+        "epoch": 60,  # 大图训练适当减少或保持
+        "f1_base_weight": 1.0,
+        "lr": 1e-4,
+        "maxLen": 12,  # 可能需更长路径
+        "hidden_size": 128,
+        "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
     "elliptic_t": {
         # 基础参数
@@ -135,9 +155,9 @@ DATASET_CONFIGS = {
         "min_community_size": 2,
         # 奖励层面
         "p_bias": 1.0,
-        "r_bias": 2.0,
+        "r_bias": 1.0,
         "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
+        "entropy_coeff": 1,
         "grad_norm": 10.0,
         "target_recall": 0.5,
         "stop_reward_scale": 2.0,
@@ -147,8 +167,8 @@ DATASET_CONFIGS = {
         "epoch": 60,
         # 其他参数
         "f1_base_weight": 1.0,
-        "lr": 1e-5,
-        "maxLen": 10,
+        "lr": 1e-4,
+        "maxLen": 20,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -193,5 +213,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
-    dataset_list = [ "elliptic_t"]
+    dataset_list = [ "dgraph_t"]
     final_results = train_all_datasets(dataset_list, seed=2026)

@@ -61,7 +61,7 @@ class Starter:
 
     def eval_model(self, expander: Expander, test_g: Graph) -> Dict[str, float]:
         """
-        评估模型（与原逻辑相同，但使用 test_g 的社区信息）
+        评估模型：修改迭代扩展逻辑，每次迭代选择社区内与社区嵌入最相似的节点作为种子扩展一次。
         """
         expander.model.eval()
 
@@ -99,9 +99,9 @@ class Starter:
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred_before[community_map[idx]].update(valid_nodes)
 
-        # 迭代扩展
+        # ================== 迭代扩展：每次选社区内最相似节点作为种子 ==================
         community_pred_after: Dict[str, Set] = {}
-        max_iter = self.params["max_iter"]
+        max_iter = self.params.get("max_iter", 1)   # 迭代次数，默认1
 
         for name_tag in test_seeds.keys():
             current_com = set(community_pred_before[name_tag])
@@ -110,26 +110,54 @@ class Starter:
                 continue
 
             for iter_idx in range(max_iter):
-                seeds = list(current_com)
-                if not seeds:
+                # 1. 计算当前社区嵌入（所有节点嵌入的平均）
+                embeddings = []
+                for node in current_com:
+                    emb = test_g.singleNodeEmbed(node)
+                    # 确保是 numpy 数组
+                    if isinstance(emb, torch.Tensor):
+                        emb = emb.cpu().numpy()
+                    embeddings.append(emb)
+                com_emb = np.mean(embeddings, axis=0)
+                norm_com = np.linalg.norm(com_emb)
+
+                # 2. 找出社区内与社区嵌入最相似的节点
+                best_node = None
+                best_sim = -1.0
+                for node in current_com:
+                    emb = test_g.singleNodeEmbed(node)
+                    if isinstance(emb, torch.Tensor):
+                        emb = emb.cpu().numpy()
+                    norm_emb = np.linalg.norm(emb)
+                    if norm_emb == 0:
+                        sim = 0.0
+                    else:
+                        sim = np.dot(com_emb, emb) / (norm_com * norm_emb)
+                    if sim > best_sim:
+                        best_sim = sim
+                        best_node = node
+
+                if best_node is None:
+                    # 理论上不会发生，但防御
                     break
 
+                # 3. 以该节点为种子进行一次扩展
                 with torch.no_grad():
-                    preds, _, _ = expander.sample_bs_trajectories(seeds)
-
+                    preds, _, _ = expander.sample_bs_trajectories([best_node])
                 new_nodes = set()
                 for p in preds:
                     new_nodes.update([n for n in p if n != "Stp"])
 
+                # 4. 合并新节点
                 if new_nodes.issubset(current_com):
+                    # 无新节点，停止迭代
                     print(f"社区 {name_tag} 迭代 {iter_idx+1} 轮后无新增节点，提前停止")
                     break
-
                 current_com.update(new_nodes)
 
             community_pred_after[name_tag] = current_com
 
-        # 计算指标
+        # ================== 计算指标 ==================
         metrics_before = {"precision": [], "recall": [], "f1": []}
         metrics_after = {"precision": [], "recall": [], "f1": []}
         for name_tag, true_addr in true_coms:
@@ -187,7 +215,6 @@ class Starter:
         print("=" * 80)
 
         return avg_metrics
-
     def run(self, dfname: str, seed: int) -> Dict[str, float]:
         """执行完整的训练和测试流程，使用 PreprocessedDataLoader 加载数据"""
         random.seed(seed)
