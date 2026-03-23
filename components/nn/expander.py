@@ -1,8 +1,7 @@
 from typing import Optional, List
 import numpy as np
 import torch
-import torch.nn.functional as F
-from .tool import eval_f1, eval_scores, pruning
+from .tool import eval_scores, pruning
 
 
 class Expander:
@@ -166,6 +165,15 @@ class Expander:
             tra_embed = torch.cat(t_tra_vector, dim=0)
             if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
                 print("[ERROR] NaN in input embeddings!")
+                # 在 prepare_inputs 的最后，return 之前添加：
+        if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
+            print("[ERROR] NaN in seed_embed or tra_embed")
+            # 可选：打印出有问题的索引
+            nan_seed_idx = torch.isnan(seed_embed).any(dim=1).nonzero().squeeze()
+            print(f"NaN in seed_embed at indices: {nan_seed_idx}")
+            # 可考虑用零替换
+            seed_embed = torch.nan_to_num(seed_embed, nan=0.0)
+            tra_embed = torch.nan_to_num(tra_embed, nan=0.0)
 
         return seed_embed, tra_embed, np.array(indptr), choices
 
@@ -233,7 +241,7 @@ class Expander:
             )
             batch_logits = self.model(*model_inputs)
 
-            actions, logps, entropies = self.sample_actions(batch_logits, training=True)
+            actions, logps, entropies = self.sample_actions(batch_logits, training=False)
 
             for j, orig_idx in enumerate(active_indices):
                 ac = actions[j]
@@ -269,6 +277,15 @@ class Expander:
         self.model.train()
 
         selected_nodes, logps, entropies_list = self.sample_bs_trajectories(seeds)
+                # 在 sample_bs_trajectories 之后
+        for name, param in self.model.named_parameters():
+            if torch.isnan(param).any():
+                print(f"NaN in param: {name}")
+        # 检查种子嵌入
+        seed_embed = self.graph.nodesEmbed(seeds)
+        if np.isnan(seed_embed).any():
+            print("NaN in seed_embed")
+        # 在 prepare_inputs 中检查 tra_vector 和 seed_vector
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
 
@@ -335,10 +352,10 @@ class Expander:
                 # 加权奖励
                 base_reward = (recall_inc * self.r_bias + precision_inc * self.p_bias) * self.f1_base_weight
 
-                # 长度惩罚（线性更温和）
-                if len(temp_set) > true_com_len:
-                    penalty = max(1.0 - 0.1 * (len(temp_set) - true_com_len), 0.0)
-                    base_reward *= penalty
+                # # 长度惩罚（线性更温和）
+                # if len(temp_set) > true_com_len:
+                #     penalty = max(1.0 - 0.1 * (len(temp_set) - true_com_len), 0.0)
+                #     base_reward *= penalty
 
                 step_rewards.append(base_reward)
 

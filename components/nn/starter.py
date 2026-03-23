@@ -9,7 +9,7 @@ from .graph import Graph
 from .Agent import Agent
 from .expander import Expander
 from .tool import eval_scores
-from .dataProcess import PreprocessedDataLoader  # 确保正确导入
+from .dataProcess import PreprocessedDataLoader
 
 
 class Tee:
@@ -40,14 +40,14 @@ class Starter:
         初始化Starter
         Args:
             params: 包含所有配置参数的字典，必须包含以下键：
-                - dfname, normal_node_ratio, expand_hop, min_community_size,
+                - dfname, min_community_size,
                   device, hidden_size, lr, maxLen, gamma, f1_base_weight,
                   p_bias, r_bias, repeat_penalty_coeff, entropy_coeff,
                   grad_norm, target_recall, stop_reward_scale, epoch, seedNum
                 - 可选: max_iter (默认2)
         """
         required_params = [
-            "dfname", "normal_node_ratio", "expand_hop", "min_community_size",
+            "dfname", "min_community_size",
             "device", "hidden_size", "lr", "maxLen", "gamma", "f1_base_weight",
             "p_bias", "r_bias", "repeat_penalty_coeff", "entropy_coeff",
             "grad_norm", "target_recall", "stop_reward_scale", "epoch", "seedNum"
@@ -213,15 +213,14 @@ class Starter:
             sys.stdout = tee
 
             print(f"\n{'='*70}\n📌 数据集：{dfname}  seed={seed}\n{'='*70}")
-            print(f"核心参数：normal_node_ratio={self.params['normal_node_ratio']}, expand_hop={self.params['expand_hop']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}")
+            print(f"核心参数：min_community_size={self.params['min_community_size']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}")
             print("-" * 70)
 
-            # 使用 PreprocessedDataLoader 加载数据
+            # 使用 PreprocessedDataLoader 加载数据（已不需要 normal_ratio 和 expand_hop）
             loader = PreprocessedDataLoader(
                 dataset_name=dfname,
                 train_ratio=0.8,
                 min_com_size=self.params["min_community_size"],
-                normal_ratio=self.params["normal_node_ratio"],
                 seed=seed
             )
 
