@@ -110,19 +110,19 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 5,  # 正常节点比例可能更高
         "expand_hop": 2,  # 控制子图大小
         "min_community_size": 5,  # 最小社区规模
-        "p_bias": 0.8,
+        "p_bias": 1.0,
         "r_bias": 1.0,
         "repeat_penalty_coeff": 0.5,
         "entropy_coeff": 0.01,
         "grad_norm": 10.0,
-        "target_recall": 0.8,
+        "target_recall": 0.5,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 40,  # 大图训练适当减少或保持
+        "epoch": 60,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 9,  # 可能需更长路径
+        "maxLen": 12,  # 可能需更长路径
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },

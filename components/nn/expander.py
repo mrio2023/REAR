@@ -13,17 +13,13 @@ class Expander:
         maxLen: int,
         optimizer,
         device: Optional[torch.device],
-        # 基础RL参数
         gamma: float,
-        # F1奖励核心参数
         f1_base_weight: float,
         p_bias: float,
         r_bias: float,
         repeat_penalty_coeff: float,
-        # 正则与优化参数
         entropy_coeff: float,
         grad_norm: float,
-        # 停止奖励参数
         target_recall: float,
         stop_reward_scale: float,
     ):
@@ -32,7 +28,7 @@ class Expander:
         self.optimizer = optimizer
         self.gamma = gamma
         self.maxLen = maxLen
-        self.device = device 
+        self.device = device
 
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
@@ -366,13 +362,6 @@ class Expander:
 
         # 构建mask（有效步数 = 轨迹长度-1，因为种子无动作）
         mask = (torch.arange(max_len_pad, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
-
-        # # ========== 奖励标准化 + 基线 ==========
-        # valid_rewards = rewards[mask.bool()]
-        # if valid_rewards.numel() > 1:
-        #     baseline = valid_rewards.mean()
-        #     rewards = rewards - baseline
-        # # =====================================
 
         # 构建log_probs张量
         logps_padded = []

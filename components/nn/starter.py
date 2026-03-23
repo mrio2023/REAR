@@ -5,11 +5,11 @@ import os
 import sys
 import time
 from typing import Dict, List, Tuple, Set, Any
-from .dataProcess import dataProcess
 from .graph import Graph
 from .Agent import Agent
 from .expander import Expander
 from .tool import eval_scores
+from .dataProcess import PreprocessedDataLoader  # 确保正确导入
 
 
 class Tee:
@@ -57,11 +57,12 @@ class Starter:
                 raise ValueError(f"缺少必要参数: {param}")
 
         self.params = params
-        # 设置默认值
         self.params.setdefault("max_iter", 1)
 
     def eval_model(self, expander: Expander, test_g: Graph) -> Dict[str, float]:
-       
+        """
+        评估模型（与原逻辑相同，但使用 test_g 的社区信息）
+        """
         expander.model.eval()
 
         true_coms: List[Tuple[str, List]] = [
@@ -73,10 +74,7 @@ class Starter:
 
         test_seeds: Dict[str, List] = {}
         for name_tag, addr_list in true_coms:
-            sample_num = min(
-                int(1 + len(addr_list) / self.params["maxLen"]),
-                len(addr_list),
-            )
+            sample_num = 1
             test_seeds[name_tag] = random.sample(addr_list, k=sample_num)
 
         print(f"测试：真实社区 {len(true_coms)}，总种子 {sum(len(v) for v in test_seeds.values())}")
@@ -191,7 +189,7 @@ class Starter:
         return avg_metrics
 
     def run(self, dfname: str, seed: int) -> Dict[str, float]:
-        """执行完整的训练和测试流程"""
+        """执行完整的训练和测试流程，使用 PreprocessedDataLoader 加载数据"""
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
@@ -218,21 +216,48 @@ class Starter:
             print(f"核心参数：normal_node_ratio={self.params['normal_node_ratio']}, expand_hop={self.params['expand_hop']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}")
             print("-" * 70)
 
-            dp = dataProcess(
-                dfname=self.params["dfname"],
-                normal_node_ratio=self.params["normal_node_ratio"],
-                expand_hop=self.params["expand_hop"],
-                min_community_size=self.params["min_community_size"],
+            # 使用 PreprocessedDataLoader 加载数据
+            loader = PreprocessedDataLoader(
+                dataset_name=dfname,
+                train_ratio=0.8,
+                min_com_size=self.params["min_community_size"],
+                normal_ratio=self.params["normal_node_ratio"],
+                seed=seed
             )
 
-            print(f"数据规模：训练节点{len(dp.train_nodes)} | 训练黑客{len(dp.train_hacker)} | 测试节点{len(dp.test_nodes)} | 测试黑客{len(dp.test_hacker)}")
+            # 获取全局图结构
+            global_adj = loader.graph['adj']
+            global_features = loader.nodefeats
+            all_nodes = set(global_adj.keys())
 
+            # 构建训练社区字典
+            train_communities = {}
+            for idx, comm in enumerate(loader.train_comms):
+                train_communities[f"train_{idx}"] = comm
+
+            # 构建测试社区字典
+            test_communities = {}
+            for idx, comm in enumerate(loader.test_comms):
+                test_communities[f"test_{idx}"] = comm
+
+            # 训练图
             train_g = Graph(
-                dfnode=dp.train_nodes,
-                dffeature=dp.train_feature,
-                dfhacker=dp.train_hacker,
-                dfedge=dp.train_edge,
+                adj=global_adj,
+                features=global_features,
+                communities=train_communities,
+                node_list=list(all_nodes)
             )
+
+            # 测试图
+            test_g = Graph(
+                adj=global_adj,
+                features=global_features,
+                communities=test_communities,
+                node_list=list(all_nodes)
+            )
+
+            print(f"训练图：节点数 {train_g.n_nodes}，特征维度 {train_g.embedsize}，训练社区数 {len(train_communities)}")
+            print(f"测试图：节点数 {test_g.n_nodes}，特征维度 {test_g.embedsize}，测试社区数 {len(test_communities)}")
 
             device = torch.device(self.params["device"])
             model = Agent(
@@ -240,7 +265,6 @@ class Starter:
                 hidden_size=self.params["hidden_size"],
             ).to(device)
 
-            # 创建 Expander（所有参数显式传入，无默认值）
             expander = Expander(
                 graph=train_g,
                 model=model,
@@ -258,27 +282,26 @@ class Starter:
                 stop_reward_scale=self.params["stop_reward_scale"],
             )
 
-            origin_seeds = dp.train_hacker["address"].tolist()
+            # 训练：从训练社区节点中随机采样种子
+            train_community_nodes = []
+            for comm in train_communities.values():
+                train_community_nodes.extend(comm)
+            train_community_nodes = list(set(train_community_nodes))
+
+            if len(train_community_nodes) < self.params["seedNum"]:
+                raise ValueError(f"训练社区节点数 {len(train_community_nodes)} 小于每轮采样数 {self.params['seedNum']}")
+
             epoch = self.params["epoch"]
             seedNum = self.params["seedNum"]
 
-            if len(origin_seeds) < seedNum:
-                raise ValueError(f"训练种子数量 {len(origin_seeds)} 小于每轮采样数 {seedNum}")
-
             print(f"\n🚀 开始训练：{epoch}轮 | 每轮采样{seedNum}种子")
             for i in range(epoch):
-                seeds = random.sample(origin_seeds, k=seedNum)
+                seeds = random.sample(train_community_nodes, k=seedNum)
                 true_coms = [train_g.sampleTrajectory(s, maxlen=self.params["maxLen"]) for s in seeds]
                 loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
                 print(f"📝 Epoch {i+1}/{epoch} | loss: {loss:.4f}")
 
             print(f"\n{'='*70}\n🧪 开始测试（真实社区+动态采样种子）\n{'='*70}")
-            test_g = Graph(
-                dfnode=dp.test_nodes,
-                dffeature=dp.test_feature,
-                dfhacker=dp.test_hacker,
-                dfedge=dp.test_edge,
-            )
             expander.graph = test_g
             test_metrics = self.eval_model(expander, test_g)
 

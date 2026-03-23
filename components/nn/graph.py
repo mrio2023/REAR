@@ -1,151 +1,114 @@
-import pandas as pd
 import numpy as np
 import random
 from sklearn.metrics.pairwise import cosine_similarity
 
 
 class Graph:
-    def __init__(self, dfnode, dffeature, dfhacker, dfedge):
-        self.df_nodes = dfnode
-        self.df_feature = dffeature
-        self.df_edge = dfedge
-        self.df_hacker = dfhacker
+    def __init__(
+        self, adj: dict, features: dict, communities: dict, node_list: list = None
+    ):
+        """
+        从预处理数据直接构建图对象。
 
-        # 批量构建邻接表
-        self.adjmap = self._cal_adj_map_batch(self.df_edge, direction="from_to")
-        self.adjtomap = self._cal_adj_map_batch(self.df_edge, direction="to_from")
+        :param adj: 邻接表，格式 {node: set(neighbors)}
+        :param features: 节点特征字典，格式 {node: list/ndarray}
+        :param communities: 社区字典，格式 {community_name: list_of_nodes}
+        :param node_list: 可选，所有节点的列表，用于快速遍历
+        """
+        self.adj = adj
+        self.features = features
+        self.communities = communities
+        self.community_seeds = communities  # 添加此行，兼容 eval_model
 
-        # 批量缓存社区种子
-        self.community_seeds = self._cache_community_seeds_batch()
-        self.embedsize = self.initEmbedSize()
+        # 构建从节点到社区名的映射（用于 sampleTrajectory）
+        self.node_to_community = {}
+        for name, nodes in communities.items():
+            for n in nodes:
+                self.node_to_community[n] = name
 
-        # 预加载所有节点嵌入
-        self.embed_cache, self.embed_dim = self._preload_embeddings()
-        # 邻居缓存（避免重复计算）
+        # 特征维度
+        self.embed_dim = 0
+        if features:
+            sample_feat = next(iter(features.values()))
+            self.embed_dim = (
+                len(sample_feat) if isinstance(sample_feat, (list, np.ndarray)) else 1
+            )
+        print(
+            f"初始化 Graph：节点数 {len(adj)}，社区数 {len(communities)}，特征维度 {self.embed_dim}"
+        )
+
+        # 预加载所有节点嵌入（向量化处理）
+        self.embed_cache = {}
+        for node, feat in features.items():
+            if isinstance(feat, list):
+                feat = np.array(feat, dtype=np.float32)
+            elif not isinstance(feat, np.ndarray):
+                feat = np.array([feat], dtype=np.float32)
+            # 处理全零向量（添加微小噪声）
+            if np.linalg.norm(feat) < 1e-8:
+                feat += np.random.normal(0, 1e-6, size=feat.shape).astype(np.float32)
+            self.embed_cache[node] = feat
+
+        # 邻居缓存
         self.neighbor_cache = {}
 
-        # 地址到标签的映射（用于 sampleTrajectory）
-        if not self.df_hacker.empty:
-            self.addr2tag = dict(
-                zip(self.df_hacker["address"], self.df_hacker["name_tag"])
-            )
-        else:
-            self.addr2tag = {}
+    @property
+    def embedsize(self):
+        return self.embed_dim
 
+    # 其余方法保持不变 ...
     def initEmbedSize(self):
-        return self.df_feature.shape[1] - 1 if not self.df_feature.empty else 0
-
-    # ========== 嵌入相关 ==========
-    def _preload_embeddings(self):
-        """批量加载嵌入，处理全零向量"""
-        embed_cache = {}
-        embed_dim = 0
-
-        if self.df_feature.empty or "address" not in self.df_feature.columns:
-            return embed_cache, embed_dim
-
-        embed_dim = len(self.df_feature.columns) - 1
-        if embed_dim == 0:
-            return embed_cache, embed_dim
-
-        addresses = self.df_feature["address"].values
-        embed_matrix = self.df_feature.iloc[:, 1:].values.astype(np.float32)
-
-        # 统一维度
-        if embed_matrix.shape[1] != embed_dim:
-            pad_width = max(0, embed_dim - embed_matrix.shape[1])
-            if pad_width > 0:
-                embed_matrix = np.pad(
-                    embed_matrix, ((0, 0), (0, pad_width)), mode="constant"
-                )
-            else:
-                embed_matrix = embed_matrix[:, :embed_dim]
-
-        # 处理全零向量（添加微小噪声）
-        norms = np.linalg.norm(embed_matrix, axis=1)
-        zero_mask = norms < 1e-8
-        if zero_mask.any():
-            print(f"[WARN] 发现 {zero_mask.sum()} 个全零嵌入向量，添加微小噪声")
-            noise = np.random.normal(0, 1e-6, size=(zero_mask.sum(), embed_dim)).astype(
-                np.float32
-            )
-            embed_matrix[zero_mask] = noise
-
-        embed_cache = dict(zip(addresses, embed_matrix))
-        return embed_cache, embed_dim
+        return self.embed_dim
 
     def singleNodeEmbed(self, node):
+        """返回单个节点的嵌入向量"""
         if node not in self.embed_cache:
-            raise ValueError(
-                f"节点 {node} 不存在于嵌入缓存中 | 缓存节点数：{len(self.embed_cache)}"
-            )
+            # 如果节点没有特征，返回零向量
+            return np.zeros(self.embed_dim, dtype=np.float32)
         return self.embed_cache[node]
 
     def nodesEmbed(self, nodes: list):
-        embeds = np.array(
-            [
-                self.embed_cache.get(n, np.zeros(self.embed_dim, dtype=np.float32))
-                for n in nodes
-            ],
-            dtype=np.float32,
-        )
-        return embeds
+        """返回多个节点的嵌入矩阵"""
+        embeds = []
+        for n in nodes:
+            embeds.append(self.singleNodeEmbed(n))
+        return np.array(embeds, dtype=np.float32)
 
-    # ========== 邻居查询 ==========
-    def getSingleNodeNeighbor(self, node: str):
+    def getSingleNodeNeighbor(self, node):
+        """返回节点的邻居列表（去重）"""
         if node in self.neighbor_cache:
             return self.neighbor_cache[node].copy()
-
-        neigh = [d["to"] for d in self.adjmap.get(node, [])] + [
-            d["from"] for d in self.adjtomap.get(node, [])
-        ]
-        neigh = list(set(neigh))
-        self.neighbor_cache[node] = neigh
-        return neigh.copy()
+        neighbors = self.adj.get(node, set())
+        # 确保返回列表
+        neigh_list = list(neighbors)
+        self.neighbor_cache[node] = neigh_list
+        return neigh_list.copy()
 
     def getNodesNeigh(self, nodes: list):
+        """返回多个节点的邻居集合"""
         res = set()
         for n in nodes:
             res.update(self.getSingleNodeNeighbor(n))
         return list(res)
 
-    # ========== 辅助批量构建函数 ==========
-    def _cal_adj_map_batch(self, df_edge: pd.DataFrame, direction: str = "from_to"):
-        """批量构建邻接表"""
-        if df_edge.empty:
-            return {}
-
-        adj_map = {}
-        if direction == "from_to":
-            grouped = df_edge.groupby("from")["to"].apply(list).to_dict()
-            adj_map = {k: [{"to": v_item} for v_item in v] for k, v in grouped.items()}
-        else:  # to_from
-            grouped = df_edge.groupby("to")["from"].apply(list).to_dict()
-            adj_map = {
-                k: [{"from": v_item} for v_item in v] for k, v in grouped.items()
-            }
-        return adj_map
-
-    def _cache_community_seeds_batch(self):
-        """批量缓存社区种子"""
-        if self.df_hacker.empty:
-            return {}
-        return (
-            self.df_hacker.groupby("name_tag")["address"]
-            .apply(lambda x: set(x.tolist()))
-            .to_dict()
-        )
-
-    # ========== 采样轨迹（用于训练） ==========
-    def sampleTrajectory(self, node: str, maxlen: int):
+    def sampleTrajectory(self, node: str, maxlen: int = None):
         """
         返回节点所属整个社区的所有节点（去重）。
-        原为随机游走，现简化为社区全量节点。
+        原为随机游走，现直接返回社区全量节点。
+        maxlen 参数保留但未使用，保持接口兼容。
         """
-        name_tag = self.addr2tag.get(node)
-        if not name_tag:
+        community_name = self.node_to_community.get(node)
+        if community_name:
+            return list(self.communities[community_name])
+        else:
+            # 若节点不属于任何社区，返回仅包含自身的列表
             return [node]
-        community_nodes = self.community_seeds.get(name_tag, set())
-        if not community_nodes:
-            return [node]
-        return list(community_nodes)
+
+    # 可选：添加图的基本信息
+    @property
+    def nodes(self):
+        return list(self.adj.keys())
+
+    @property
+    def n_nodes(self):
+        return len(self.adj)
