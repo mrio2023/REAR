@@ -13,7 +13,7 @@ class PreprocessedDataLoader:
         :param seed: 随机种子
         """
         self.dataset = dataset_name
-        self.root = "/home/u2023312299/sci/compare/compareDatasets"
+        self.root = "D:\CodeSummary\sci\compareDatasets"
         self.train_ratio = train_ratio
         self.min_com_size = min_com_size
         random.seed(seed)
