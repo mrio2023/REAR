@@ -101,7 +101,7 @@ class Starter:
 
         # ================== 迭代扩展：每次选社区内最相似节点作为种子 ==================
         community_pred_after: Dict[str, Set] = {}
-        max_iter = self.params.get("max_iter", 1)   # 迭代次数，默认1
+        max_iter = self.params.get("max_iter", 1)
 
         for name_tag in test_seeds.keys():
             current_com = set(community_pred_before[name_tag])
@@ -110,18 +110,15 @@ class Starter:
                 continue
 
             for iter_idx in range(max_iter):
-                # 1. 计算当前社区嵌入（所有节点嵌入的平均）
                 embeddings = []
                 for node in current_com:
                     emb = test_g.singleNodeEmbed(node)
-                    # 确保是 numpy 数组
                     if isinstance(emb, torch.Tensor):
                         emb = emb.cpu().numpy()
                     embeddings.append(emb)
                 com_emb = np.mean(embeddings, axis=0)
                 norm_com = np.linalg.norm(com_emb)
 
-                # 2. 找出社区内与社区嵌入最相似的节点
                 best_node = None
                 best_sim = -1.0
                 for node in current_com:
@@ -138,40 +135,45 @@ class Starter:
                         best_node = node
 
                 if best_node is None:
-                    # 理论上不会发生，但防御
                     break
 
-                # 3. 以该节点为种子进行一次扩展
                 with torch.no_grad():
                     preds, _, _ = expander.sample_bs_trajectories([best_node])
                 new_nodes = set()
                 for p in preds:
                     new_nodes.update([n for n in p if n != "Stp"])
 
-                # 4. 合并新节点
                 if new_nodes.issubset(current_com):
-                    # 无新节点，停止迭代
                     print(f"社区 {name_tag} 迭代 {iter_idx+1} 轮后无新增节点，提前停止")
                     break
                 current_com.update(new_nodes)
 
             community_pred_after[name_tag] = current_com
 
-        # ================== 计算指标 ==================
-        metrics_before = {"precision": [], "recall": [], "f1": []}
-        metrics_after = {"precision": [], "recall": [], "f1": []}
+        # ================== 计算指标：新增 Jaccard ==================
+        metrics_before = {"precision": [], "recall": [], "f1": [], "jaccard": []}
+        metrics_after = {"precision": [], "recall": [], "f1": [], "jaccard": []}
+
         for name_tag, true_addr in true_coms:
+            # 扩展前
             pred_before = list(community_pred_before.get(name_tag, set()))
             p_b, r_b, f1_b = eval_scores(pred_before, true_addr)
+            j_b = len(set(pred_before) & set(true_addr)) / len(set(pred_before) | set(true_addr)) if len(set(pred_before) | set(true_addr)) > 0 else 0.0
+
             metrics_before["precision"].append(p_b)
             metrics_before["recall"].append(r_b)
             metrics_before["f1"].append(f1_b)
+            metrics_before["jaccard"].append(j_b)
 
+            # 扩展后
             pred_after = list(community_pred_after.get(name_tag, set()))
             p_a, r_a, f1_a = eval_scores(pred_after, true_addr)
+            j_a = len(set(pred_after) & set(true_addr)) / len(set(pred_after) | set(true_addr)) if len(set(pred_after) | set(true_addr)) > 0 else 0.0
+
             metrics_after["precision"].append(p_a)
             metrics_after["recall"].append(r_a)
             metrics_after["f1"].append(f1_a)
+            metrics_after["jaccard"].append(j_a)
 
         def safe_mean(values: List[float]) -> float:
             return round(np.mean(values) if values else 0.0, 4)
@@ -184,46 +186,68 @@ class Starter:
                 return 100.0 if new_val > 0 else 0.0
             return round((new_val - old_val) / old_val * 100, 2)
 
-        before_avg_f1 = safe_mean(metrics_before["f1"])
-        before_avg_recall = safe_mean(metrics_before["recall"])
+        # 平均值
         before_avg_precision = safe_mean(metrics_before["precision"])
+        before_avg_recall = safe_mean(metrics_before["recall"])
+        before_avg_f1 = safe_mean(metrics_before["f1"])
+        before_avg_jaccard = safe_mean(metrics_before["jaccard"])
 
-        after_avg_f1 = safe_mean(metrics_after["f1"])
-        after_avg_recall = safe_mean(metrics_after["recall"])
         after_avg_precision = safe_mean(metrics_after["precision"])
+        after_avg_recall = safe_mean(metrics_after["recall"])
+        after_avg_f1 = safe_mean(metrics_after["f1"])
+        after_avg_jaccard = safe_mean(metrics_after["jaccard"])
+
+        # 标准差
+        before_std_f1 = safe_std(metrics_before["f1"])
+        after_std_f1 = safe_std(metrics_after["f1"])
+        before_std_jaccard = safe_std(metrics_before["jaccard"])
+        after_std_jaccard = safe_std(metrics_after["jaccard"])
+
+        # 变化率
+        f1_imp = safe_percent_change(after_avg_f1, before_avg_f1)
+        recall_imp = safe_percent_change(after_avg_recall, before_avg_recall)
+        precision_change = safe_percent_change(after_avg_precision, before_avg_precision)
+        jaccard_change = safe_percent_change(after_avg_jaccard, before_avg_jaccard)
 
         avg_metrics = {
             "before_avg_precision": before_avg_precision,
             "before_avg_recall": before_avg_recall,
             "before_avg_f1": before_avg_f1,
-            "before_std_f1": safe_std(metrics_before["f1"]),
+            "before_avg_jaccard": before_avg_jaccard,
+            "before_std_f1": before_std_f1,
+            "before_std_jaccard": before_std_jaccard,
+
             "after_avg_precision": after_avg_precision,
             "after_avg_recall": after_avg_recall,
             "after_avg_f1": after_avg_f1,
-            "after_std_f1": safe_std(metrics_after["f1"]),
-            "f1_improvement": safe_percent_change(after_avg_f1, before_avg_f1),
-            "recall_improvement": safe_percent_change(after_avg_recall, before_avg_recall),
-            "precision_change": safe_percent_change(after_avg_precision, before_avg_precision),
+            "after_avg_jaccard": after_avg_jaccard,
+            "after_std_f1": after_std_f1,
+            "after_std_jaccard": after_std_jaccard,
+
+            "f1_improvement": f1_imp,
+            "recall_improvement": recall_imp,
+            "precision_change": precision_change,
+            "jaccard_change": jaccard_change,
         }
 
+        # ================== 打印输出（带 Jaccard） ==================
         print("\n" + "=" * 80)
         print("📊 扩展前后指标对比（模型迭代扩展）")
         print("=" * 80)
-        print(f"扩展前 | P: {avg_metrics['before_avg_precision']} | R: {avg_metrics['before_avg_recall']} | F1: {avg_metrics['before_avg_f1']} (±{avg_metrics['before_std_f1']})")
-        print(f"扩展后 | P: {avg_metrics['after_avg_precision']} | R: {avg_metrics['after_avg_recall']} | F1: {avg_metrics['after_avg_f1']} (±{avg_metrics['after_std_f1']})")
-        print(f"变化幅度 | P: {avg_metrics['precision_change']}% | R: {avg_metrics['recall_improvement']}% | F1: {avg_metrics['f1_improvement']}%")
+        print(f"扩展前 | P: {before_avg_precision} | R: {before_avg_recall} | F1: {before_avg_f1} (±{before_std_f1}) | Jaccard: {before_avg_jaccard} (±{before_std_jaccard})")
+        print(f"扩展后 | P: {after_avg_precision} | R: {after_avg_recall} | F1: {after_avg_f1} (±{after_std_f1}) | Jaccard: {after_avg_jaccard} (±{after_std_jaccard})")
+        print(f"变化幅度 | P: {precision_change}% | R: {recall_imp}% | F1: {f1_imp}% | Jaccard: {jaccard_change}%")
         print("=" * 80)
 
         return avg_metrics
+
     def run(self, dfname: str, seed: int) -> Dict[str, float]:
-        """执行完整的训练和测试流程，使用 PreprocessedDataLoader 加载数据"""
         random.seed(seed)
         np.random.seed(seed)
         torch.manual_seed(seed)
         if torch.cuda.is_available() and self.params["device"] == "cuda":
             torch.cuda.manual_seed(seed)
 
-        # 按 dfname 分文件夹保存日志
         log_dir = os.path.join("logs", dfname)
         os.makedirs(log_dir, exist_ok=True)
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -243,7 +267,6 @@ class Starter:
             print(f"核心参数：min_community_size={self.params['min_community_size']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}")
             print("-" * 70)
 
-            # 使用 PreprocessedDataLoader 加载数据（已不需要 normal_ratio 和 expand_hop）
             loader = PreprocessedDataLoader(
                 dataset_name=dfname,
                 train_ratio=0.8,
@@ -251,22 +274,18 @@ class Starter:
                 seed=seed
             )
 
-            # 获取全局图结构
             global_adj = loader.graph['adj']
             global_features = loader.nodefeats
             all_nodes = set(global_adj.keys())
 
-            # 构建训练社区字典
             train_communities = {}
             for idx, comm in enumerate(loader.train_comms):
                 train_communities[f"train_{idx}"] = comm
 
-            # 构建测试社区字典
             test_communities = {}
             for idx, comm in enumerate(loader.test_comms):
                 test_communities[f"test_{idx}"] = comm
 
-            # 训练图
             train_g = Graph(
                 adj=global_adj,
                 features=global_features,
@@ -274,7 +293,6 @@ class Starter:
                 node_list=list(all_nodes)
             )
 
-            # 测试图
             test_g = Graph(
                 adj=global_adj,
                 features=global_features,
@@ -308,7 +326,6 @@ class Starter:
                 stop_reward_scale=self.params["stop_reward_scale"],
             )
 
-            # 训练：从训练社区节点中随机采样种子
             train_community_nodes = []
             for comm in train_communities.values():
                 train_community_nodes.extend(comm)

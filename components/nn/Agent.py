@@ -45,16 +45,32 @@ class Agent(nn.Module):
             nn.init.constant_(self.stopping_score_layer.bias.data, 0.01)
 
     def forward(self, x_seeds, x_nodes, indptr):
-        # 特征嵌入与融合
+        # 检查输入
+        if torch.isnan(x_seeds).any() or torch.isinf(x_seeds).any():
+            print(f"[DEBUG] NaN/Inf in x_seeds! shape={x_seeds.shape}, min={x_seeds.min()}, max={x_seeds.max()}")
+        if torch.isnan(x_nodes).any() or torch.isinf(x_nodes).any():
+            print(f"[DEBUG] NaN/Inf in x_nodes! shape={x_nodes.shape}, min={x_nodes.min()}, max={x_nodes.max()}")
+
         h_seed = self.seed_embedding(x_seeds)
         h_node = self.node_embedding(x_nodes)
         h = h_seed + h_node
+
+        # 检查融合后的 h
+        if torch.isnan(h).any() or torch.isinf(h).any():
+            print(f"[DEBUG] NaN/Inf in h (after sum)! shape={h.shape}")
+
         h = self.input_mapping(h)
 
+        # 检查映射后 h
+        if torch.isnan(h).any() or torch.isinf(h).any():
+            print(f"[DEBUG] NaN/Inf in h (after input_mapping)! shape={h.shape}")
+
         node_scores = self.node_score_layer(h).squeeze(1)
+        if torch.isnan(node_scores).any() or torch.isinf(node_scores).any():
+            print(f"[DEBUG] NaN/Inf in node_scores! shape={node_scores.shape}")
 
         batch_logits = []
-        for startpoint, endpoint, candidate_endpoint in indptr:
+        for idx, (startpoint, endpoint, candidate_endpoint) in enumerate(indptr):
             if startpoint == endpoint:
                 raise ValueError("Finished Episode!")
 
@@ -64,9 +80,17 @@ class Agent(nn.Module):
             stop_node = h[startpoint:endpoint].sum(dim=0, keepdim=True)
             stop_node = stop_node / (endpoint - startpoint)
 
+            if torch.isnan(stop_node).any() or torch.isinf(stop_node).any():
+                print(f"[DEBUG] NaN/Inf in stop_node for batch {idx}")
+
             # 计算各类logits
             node_logits = node_scores[startpoint:candidate_endpoint]
             stopping_logits = self.stopping_score_layer(stop_node).squeeze(0)
+
+            if torch.isnan(node_logits).any() or torch.isinf(node_logits).any():
+                print(f"[DEBUG] NaN/Inf in node_logits for batch {idx}")
+            if torch.isnan(stopping_logits).any() or torch.isinf(stopping_logits).any():
+                print(f"[DEBUG] NaN/Inf in stopping_logits for batch {idx}")
 
             # 统一维度并拼接
             stop_action_logit = stopping_logits[1:].squeeze()
@@ -75,10 +99,8 @@ class Agent(nn.Module):
                 dim=0,
             )
 
-            if len(action_logits) - candiLen != 1:
-                print("输出的actionlogits长度", len(action_logits))
-                print("当前候选者的数目", candiLen)
-                print("出了问题！")
+            if torch.isnan(action_logits).any() or torch.isinf(action_logits).any():
+                print(f"[DEBUG] NaN/Inf in action_logits for batch {idx}")
             batch_logits.append(action_logits)
-            
+
         return batch_logits
