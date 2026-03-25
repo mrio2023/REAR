@@ -106,7 +106,7 @@ DATASET_CONFIGS = {
         "normal_node_ratio": 5,  # 正常节点比例可能更高
         "expand_hop": 2,  # 控制子图大小
         "min_community_size": 5,  # 最小社区规模
-        "p_bias": 1.5,
+        "p_bias": 1.0,
         "r_bias": 1.0,
         "repeat_penalty_coeff": 0.5,
         "entropy_coeff": 0.01,
@@ -118,7 +118,7 @@ DATASET_CONFIGS = {
         "epoch": 60,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 12,  # 可能需更长路径
+        "maxLen": 10,  # 可能需更长路径
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     }
@@ -164,5 +164,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "elliptic"]
+    dataset_list = [ "dgraph"]
     final_results = train_all_datasets(dataset_list, seed=2026)

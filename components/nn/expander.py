@@ -68,8 +68,9 @@ class Expander:
 
             # 防御性处理 NaN 和极端值
             if torch.isnan(batch_logits).any():
-                print(f"[ERROR] NaN detected in logits at batch index {i}")
-                batch_logits = torch.nan_to_num(batch_logits, nan=0.0)
+
+                raise ValueError(f"[ERROR] NaN detected in logits at batch index {i}")
+                # batch_logits = torch.nan_to_num(batch_logits, nan=0.0)
             batch_logits = torch.clamp(batch_logits, min=-20, max=20)
 
             dist = torch.distributions.Categorical(logits=batch_logits)
@@ -164,17 +165,11 @@ class Expander:
             seed_embed = torch.cat(t_seed_vector, dim=0)
             tra_embed = torch.cat(t_tra_vector, dim=0)
             if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
-                print("[ERROR] NaN in input embeddings!")
+                raise ValueError("[ERROR] NaN in input embeddings!")
                 # 在 prepare_inputs 的最后，return 之前添加：
         if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
-            print("[ERROR] NaN in seed_embed or tra_embed")
-            # 可选：打印出有问题的索引
-            nan_seed_idx = torch.isnan(seed_embed).any(dim=1).nonzero().squeeze()
-            print(f"NaN in seed_embed at indices: {nan_seed_idx}")
-            # 可考虑用零替换
-            seed_embed = torch.nan_to_num(seed_embed, nan=0.0)
-            tra_embed = torch.nan_to_num(tra_embed, nan=0.0)
-
+            raise ValueError("[ERROR] NaN in seed_embed or tra_embed")
+           
         return seed_embed, tra_embed, np.array(indptr), choices
 
     def add_node(self, new_node, tra_nodes, tra_sets, index):
