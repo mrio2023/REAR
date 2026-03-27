@@ -1,2 +1,0 @@
-    # 反向传播后、参数更新前打印（最关键时机）
-        print(f"Grad Check | Total Grad Norm: {torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0):.4f} | Param Mean: {torch.mean(torch.stack([p.data.mean() for p in self.model.parameters() if p.requires_grad])):.4f} | Grad Mean: {torch.mean(torch.stack([p.grad.mean() if p.grad is not None else torch.tensor(0.) for p in self.model.parameters() if p.requires_grad])):.4f}")
