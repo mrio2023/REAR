@@ -3,10 +3,10 @@ import os
 from nn.starter import Starter  # 使用已适配纯字典传参的Starter
 from nn.tool import set_seed
 
-# 设置工作目录
-current_file = os.path.abspath(__file__)
-sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
-os.chdir(sci_dir)
+# # 设置工作目录
+# current_file = os.path.abspath(__file__)
+# sci_dir = os.path.dirname(os.path.dirname(os.path.dirname(current_file)))
+# os.chdir(sci_dir)
 
 
 # 数据集参数配置表（所有参数集中管理，已适配新版Expander）
