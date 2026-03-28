@@ -13,6 +13,7 @@ from .expander import Expander
 from .tool import compute_single_metrics, safe_mean
 from .dataProcess import DataLoader
 from .tee import Tee
+from .refiner import Refiner   # 导入 Refiner
 
 
 class Starter:
@@ -20,9 +21,9 @@ class Starter:
         self.params = params
         self.params.setdefault("max_iter", 1)
 
-    def eval_model(self, expander: Expander, test_g: Graph) -> None:
+    def eval_model(self, expander: Expander, test_g: Graph, refiner=None) -> None:
         """
-        评估模型：仅使用初始单轮推理，直接打印结果
+        评估模型：初始单轮推理，可选应用 Refiner 精炼。
         """
         expander.model.eval()
 
@@ -63,22 +64,28 @@ class Starter:
                 valid_nodes = [n for n in pred_com if n != "Stp"]
                 community_pred[community_map[idx]].update(valid_nodes)
 
-        # 3. 计算并直接打印指标
+        # 3. 可选后处理精炼
+        if refiner is not None:
+            for tag in community_pred.keys():
+                comm_list = list(community_pred[tag])
+                refined = refiner.refine_community(comm_list, threshold=0.3)  # 阈值可调
+                community_pred[tag] = set(refined)
+            print("🔧 已应用 Refiner 精炼（剔除噪声节点）")
+
+        # 4. 计算指标
         metrics = {"precision": [], "recall": [], "f1": [], "jaccard": []}
 
         for name_tag, true_addr in true_coms:
             pred_com = list(community_pred.get(name_tag, set()))
             compute_single_metrics(pred_com, true_addr, metrics)
 
-        # 计算平均值
         avg_p = safe_mean(metrics["precision"])
         avg_r = safe_mean(metrics["recall"])
         avg_f1 = safe_mean(metrics["f1"])
         avg_j = safe_mean(metrics["jaccard"])
 
-        # 直接打印结果
         print("\n" + "=" * 80)
-        print("📊 初始推理指标（无迭代扩展）")
+        print("📊 最终评估指标" + ("（含 Refiner 精炼）" if refiner else "（无精炼）"))
         print("=" * 80)
         print(f"Precision: {avg_p} | Recall: {avg_r} | F1: {avg_f1} | Jaccard: {avg_j}")
         print("=" * 80)
@@ -172,9 +179,20 @@ class Starter:
                 loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
                 print(f"Epoch {i+1}/{epoch} | loss: {loss:.4f}")
 
-            print(f"开始测试（真实社区+动态采样种子）")
+            # -------------------- 新增：训练 Refiner --------------------
+            print("\n开始训练 Refiner...")
+            refiner = Refiner(train_g, expander)
+            refiner.train()
+            # ---------------------------------------------------------
+
+            # 测试：应用 Refiner
+            print("\n开始测试（真实社区+动态采样种子）")
             expander.graph = test_g
-            self.eval_model(expander, test_g)
+            self.eval_model(expander, test_g, refiner=refiner)
+
+            # 可选：对比无 Refiner 的效果（可注释掉）
+            # print("\n--- 对比：无 Refiner 精炼 ---")
+            # self.eval_model(expander, test_g, refiner=None)
 
         except Exception as e:
             print(f"\n❌ 运行出错: {str(e)}", file=sys.stderr)
