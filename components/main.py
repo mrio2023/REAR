@@ -65,7 +65,7 @@ DATASET_CONFIGS = {
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 45,
+        "epoch": 60,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 12,
@@ -73,8 +73,8 @@ DATASET_CONFIGS = {
         "device":  "cpu",
     },
     "dgraph": {
-        "min_community_size": 5,
-        "p_bias": 1.5,
+        "min_community_size": 3,
+        "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 10.0,
         "target_f1": 0.5,
@@ -118,5 +118,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
+    dataset_list = ["dgraph"]
     train_all_datasets(dataset_list, seed=2026)
