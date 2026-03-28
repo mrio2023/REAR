@@ -1,0 +1,25 @@
+name: pies
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch=2.9.0        # 可根据需要换成 cuda 版本，例如 pytorch-cuda=12.1
+  - torchvision
+  - torchaudio
+  - torch-geometric
+  - numpy
+  - scipy
+  - pandas
+  - scikit-learn
+  - networkx
+  - tqdm
+  - pyyaml
+  - joblib
+  - optree               # torch-geometric 常用依赖
+  - packaging            # 版本检查工具
+  - pip
+  - pip:
+    # 如果项目中有其他 pip 安装的包，可在此添加
+    # 注意：torch-npu 一般不需要，除非你使用昇腾 NPU
