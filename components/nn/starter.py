@@ -13,7 +13,7 @@ from .expander import Expander
 from .tool import compute_single_metrics, safe_mean
 from .dataProcess import DataLoader
 from .tee import Tee
-from .refiner import Refiner   # 导入 Refiner
+from .refiner import Refiner  # 导入 Refiner
 
 
 class Starter:
@@ -23,7 +23,7 @@ class Starter:
 
     def eval_model(self, expander: Expander, test_g: Graph, refiner=None) -> None:
         """
-        评估模型：初始单轮推理，可选应用 Refiner 精炼。
+        评估模型：计算原始预测指标，若提供 Refiner 则额外计算精炼后的指标。
         """
         expander.model.eval()
 
@@ -56,39 +56,79 @@ class Starter:
             with torch.no_grad():
                 pred_coms_flat, _ = expander.sample_bs_trajectories(all_seeds_flat)
 
-        community_pred: Dict[str, Set] = {
+        # 原始预测（未精炼）
+        community_pred_original: Dict[str, Set] = {
             tag: set() for tag in test_seeds.keys()
         }
         for idx, pred_com in enumerate(pred_coms_flat):
             if idx < len(community_map):
                 valid_nodes = [n for n in pred_com if n != "Stp"]
-                community_pred[community_map[idx]].update(valid_nodes)
+                community_pred_original[community_map[idx]].update(valid_nodes)
 
-        # 3. 可选后处理精炼
-        if refiner is not None:
-            for tag in community_pred.keys():
-                comm_list = list(community_pred[tag])
-                refined = refiner.refine_community(comm_list, threshold=0.3)  # 阈值可调
-                community_pred[tag] = set(refined)
-            print("🔧 已应用 Refiner 精炼（剔除噪声节点）")
-
-        # 4. 计算指标
-        metrics = {"precision": [], "recall": [], "f1": [], "jaccard": []}
-
+        # 计算原始指标
+        metrics_original = {"precision": [], "recall": [], "f1": [], "jaccard": []}
         for name_tag, true_addr in true_coms:
-            pred_com = list(community_pred.get(name_tag, set()))
-            compute_single_metrics(pred_com, true_addr, metrics)
+            pred_com = list(community_pred_original.get(name_tag, set()))
+            compute_single_metrics(pred_com, true_addr, metrics_original)
 
-        avg_p = safe_mean(metrics["precision"])
-        avg_r = safe_mean(metrics["recall"])
-        avg_f1 = safe_mean(metrics["f1"])
-        avg_j = safe_mean(metrics["jaccard"])
+        avg_p_orig = safe_mean(metrics_original["precision"])
+        avg_r_orig = safe_mean(metrics_original["recall"])
+        avg_f1_orig = safe_mean(metrics_original["f1"])
+        avg_j_orig = safe_mean(metrics_original["jaccard"])
 
         print("\n" + "=" * 80)
-        print("📊 最终评估指标" + ("（含 Refiner 精炼）" if refiner else "（无精炼）"))
+        print("📊 原始评估指标（无精炼）")
         print("=" * 80)
-        print(f"Precision: {avg_p} | Recall: {avg_r} | F1: {avg_f1} | Jaccard: {avg_j}")
-        print("=" * 80)
+        print(
+            f"Precision: {avg_p_orig:.4f} | Recall: {avg_r_orig:.4f} | F1: {avg_f1_orig:.4f} | Jaccard: {avg_j_orig:.4f}"
+        )
+
+        # 3. 若提供 Refiner，则进行精炼并计算精炼后指标
+        if refiner is not None:
+            # 应用精炼
+            community_pred_refined = {
+                tag: set(community_pred_original[tag])
+                for tag in community_pred_original.keys()
+            }
+            for tag in community_pred_refined.keys():
+                comm_list = list(community_pred_refined[tag])
+                refined = refiner.refine_community(comm_list, threshold=0.3)
+                community_pred_refined[tag] = set(refined)
+            print("🔧 已应用 Refiner 精炼（剔除噪声节点）")
+
+            # 计算精炼后指标
+            metrics_refined = {"precision": [], "recall": [], "f1": [], "jaccard": []}
+            for name_tag, true_addr in true_coms:
+                pred_com = list(community_pred_refined.get(name_tag, set()))
+                compute_single_metrics(pred_com, true_addr, metrics_refined)
+
+            avg_p_ref = safe_mean(metrics_refined["precision"])
+            avg_r_ref = safe_mean(metrics_refined["recall"])
+            avg_f1_ref = safe_mean(metrics_refined["f1"])
+            avg_j_ref = safe_mean(metrics_refined["jaccard"])
+
+            print("\n" + "=" * 80)
+            print("📊 精炼后评估指标")
+            print("=" * 80)
+            print(
+                f"Precision: {avg_p_ref:.4f} | Recall: {avg_r_ref:.4f} | F1: {avg_f1_ref:.4f} | Jaccard: {avg_j_ref:.4f}"
+            )
+            print("\n" + "=" * 80)
+            print("📈 指标变化")
+            print("=" * 80)
+            print(
+                f"Precision: {avg_p_orig:.4f} → {avg_p_ref:.4f} ({avg_p_ref - avg_p_orig:+.4f})"
+            )
+            print(
+                f"Recall:    {avg_r_orig:.4f} → {avg_r_ref:.4f} ({avg_r_ref - avg_r_orig:+.4f})"
+            )
+            print(
+                f"F1:        {avg_f1_orig:.4f} → {avg_f1_ref:.4f} ({avg_f1_ref - avg_f1_orig:+.4f})"
+            )
+            print(
+                f"Jaccard:   {avg_j_orig:.4f} → {avg_j_ref:.4f} ({avg_j_ref - avg_j_orig:+.4f})"
+            )
+            print("=" * 80)
 
     def run(self, dfname: str, seed: int) -> None:
         random.seed(seed)
@@ -191,10 +231,6 @@ class Starter:
             # 测试前切换图
             refiner.train_g = test_g
             self.eval_model(expander, test_g, refiner=refiner)
-
-            # 可选：对比无 Refiner 的效果（可注释掉）
-            # print("\n--- 对比：无 Refiner 精炼 ---")
-            # self.eval_model(expander, test_g, refiner=None)
 
         except Exception as e:
             print(f"\n❌ 运行出错: {str(e)}", file=sys.stderr)
