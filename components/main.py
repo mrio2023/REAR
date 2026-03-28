@@ -91,7 +91,7 @@ DATASET_CONFIGS = {
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 10,  # 大图训练适当减少或保持
+        "epoch": 1,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 10,  # 可能需更长路径

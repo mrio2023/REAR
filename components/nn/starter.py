@@ -9,7 +9,7 @@ from .graph import Graph
 from .Agent import Agent
 from .expander import Expander
 from .tool import eval_scores
-from .dataProcess import PreprocessedDataLoader
+from .dataProcess import DataLoader
 
 
 class Tee:
@@ -269,7 +269,7 @@ class Starter:
             )
             print("-" * 70)
 
-            loader = PreprocessedDataLoader(
+            loader = DataLoader(
                 dataset_name=dfname,
                 train_ratio=0.8,
                 min_com_size=self.params["min_community_size"],
@@ -278,7 +278,7 @@ class Starter:
 
             global_adj = loader.graph["adj"]
             global_features = loader.nodefeats
-            all_nodes = set(global_adj.keys())
+          
 
             train_communities = {}
             for idx, comm in enumerate(loader.train_comms):
