@@ -80,7 +80,7 @@ class Graph:
             res.update(self.getSingleNodeNeighbor(n))
         return list(res)
 
-    def sampleTrajectory(self, node: str, maxlen: int = None):
+    def getNodeCom(self, node: str):
         """
         返回节点所属整个社区的所有节点（去重）。
         原为随机游走，现直接返回社区全量节点。

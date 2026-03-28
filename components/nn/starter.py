@@ -47,27 +47,7 @@ class Starter:
                   grad_norm, target_recall, stop_reward_scale, epoch, seedNum
                 - 可选: max_iter (默认2)
         """
-        required_params = [
-            "dfname",
-            "min_community_size",
-            "device",
-            "hidden_size",
-            "lr",
-            "maxLen",
-            "gamma",
-            "f1_base_weight",
-            "p_bias",
-            "r_bias",
- 
-            "grad_norm",
-            "target_recall",
-            "stop_reward_scale",
-            "epoch",
-            "seedNum",
-        ]
-        for param in required_params:
-            if param not in params:
-                raise ValueError(f"缺少必要参数: {param}")
+     
 
         self.params = params
         self.params.setdefault("max_iter", 1)
@@ -322,7 +302,7 @@ class Starter:
                 p_bias=self.params["p_bias"],
                 r_bias=self.params["r_bias"],
                 grad_norm=self.params["grad_norm"],
-                target_recall=self.params["target_recall"],
+                target_f1=self.params["target_f1"],
                 stop_reward_scale=self.params["stop_reward_scale"],
             )
 

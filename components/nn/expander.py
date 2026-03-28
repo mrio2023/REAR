@@ -17,7 +17,7 @@ class Expander:
         p_bias: float,
         r_bias: float,
         grad_norm: float,
-        target_recall: float,
+        target_f1: float,
         stop_reward_scale: float,
     ):
         self.graph = graph
@@ -30,7 +30,7 @@ class Expander:
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
         self.r_bias = r_bias
-
+        self.target_f1 = target_f1
         self.grad_norm = grad_norm
         self.stop_reward_scale = stop_reward_scale
 
@@ -39,7 +39,7 @@ class Expander:
         )
         print(f"p_bias={p_bias}, r_bias={r_bias}")
         print(f" grad_norm={grad_norm}")
-        print(f"target_recall={target_recall}, stop_reward_scale={stop_reward_scale}")
+        print(f"target_recall={target_f1}, stop_reward_scale={stop_reward_scale}")
 
     def sample_actions(self, logits, training=True):
         """
@@ -176,17 +176,14 @@ class Expander:
         return seed_embed, tra_embed, np.array(indptr), choices
 
     def add_node(self, new_node, tra_nodes, tra_sets, index):
-        """添加节点到轨迹，更新done状态，返回新节点嵌入（如果添加成功）"""
-        if (
-            new_node in (None, "Stp", -1)
-            or len(tra_nodes[index]) >= self.maxLen
-            or (new_node != "Stp" and new_node in tra_sets[index])
-        ):
-            # 重复节点不标记 done，允许继续，但返回 None
-            if new_node != "Stp" and new_node in tra_sets[index]:
-                return None
+        if new_node in (None, "Stp", -1) or len(tra_nodes[index]) >= self.maxLen:
+            # 如果是停止动作，也加入轨迹
+            if new_node == "Stp":
+                tra_nodes[index].append("Stp")
             self.done[index] = True
             return None
+        if new_node in tra_sets[index]:
+            return None  # 重复节点不添加
         tra_nodes[index].append(new_node)
         tra_sets[index].add(new_node)
         embed = self.graph.singleNodeEmbed(new_node)
@@ -220,7 +217,7 @@ class Expander:
         tra_nodes = [[s] for s in seeds]
         tra_sets = [{s} for s in seeds]
         tra_logps = [[] for _ in range(len(seeds))]
-        tra_entropies = [[] for _ in range(len(seeds))]
+
         self.done = [False] * len(seeds)
         step = 0
 
@@ -319,11 +316,19 @@ class Expander:
             for node in com[1:]:
 
                 if node != "Stp" and node in temp_set:
-                    raise ValueError("has same node")
+                    raise ValueError("has same node,check duplicate removal code")
 
                 if node == "Stp":
-                    curr_r = len(temp_set & true_com_set) / true_com_len
-                    stop_reward = (curr_r - self.target_recall) * self.stop_reward_scale
+
+                    intersect = len(temp_set & true_com_set)
+                    curr_p = intersect / len(temp_set) if len(temp_set) > 0 else 0.0
+                    curr_r = intersect / true_com_len
+                    # 计算 F1，防止除零
+                    if curr_p + curr_r > 0:
+                        curr_f1 = 2 * curr_p * curr_r / (curr_p + curr_r)
+                    else:
+                        curr_f1 = 0.0
+                    stop_reward = (curr_f1 - self.target_f1) * self.stop_reward_scale
                     step_rewards.append(stop_reward)
                     continue
 
@@ -388,7 +393,7 @@ class Expander:
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
-        # 策略梯度损失
+      
         pg_loss = -(rewards.detach() * logps * mask).sum()
 
         loss = pg_loss

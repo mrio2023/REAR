@@ -10,7 +10,7 @@ DATASET_CONFIGS = {
         "p_bias": 0.2,
         "r_bias": 1.0,
         "grad_norm": 1.0,
-        "target_recall": 0.8,
+        "target_f1": 0.8,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
@@ -27,7 +27,7 @@ DATASET_CONFIGS = {
         "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 1.0,
-        "target_recall": 0.5,
+        "target_f1": 0.5,
         "stop_reward_scale": 2.0,
         # 训练层面
         "gamma": 0.99,
@@ -45,7 +45,7 @@ DATASET_CONFIGS = {
         "p_bias": 0.8,
         "r_bias": 1.2,
         "grad_norm": 1.0,
-        "target_recall": 0.8,
+        "target_f1": 0.8,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
@@ -61,7 +61,7 @@ DATASET_CONFIGS = {
         "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 1.0,
-        "target_recall": 0.8,
+        "target_f1": 0.8,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
@@ -74,14 +74,14 @@ DATASET_CONFIGS = {
     },
     "dgraph": {
         "min_community_size": 5,
-        "p_bias": 1.0,
+        "p_bias": 1.5,
         "r_bias": 1.0,
         "grad_norm": 10.0,
-        "target_recall": 0.5,
+        "target_f1": 0.5,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 1,  # 大图训练适当减少或保持
+        "epoch": 70,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 10,  # 可能需更长路径
@@ -126,5 +126,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = ["dgraph"]
+    dataset_list = ["ibm_l_medium"]
     train_all_datasets(dataset_list, seed=2026)
