@@ -75,9 +75,9 @@ DATASET_CONFIGS = {
     "dgraph": {
         "min_community_size": 3,
         "p_bias": 1.0,
-        "r_bias": 1.0,
+        "r_bias": 1.3,
         "grad_norm": 10.0,
-        "target_f1": 0.5,
+        "target_f1": 0.4,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
