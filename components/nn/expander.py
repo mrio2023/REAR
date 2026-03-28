@@ -52,16 +52,16 @@ class Expander:
         返回：
             actions: 列表，每个元素是采样到的动作（整数或"Stp"）
             log_probs: 列表，每个元素是动作的对数概率张量
-            entropies: 列表，每个元素是动作分布的熵张量
+
         """
-        actions, log_probs, entropies = [], [], []
+        actions, log_probs = [], []
 
         for i, batch_logits in enumerate(logits):
             if batch_logits is None or batch_logits.numel() == 0:
                 print(f"[WARN] Empty logits at batch index {i}，视为停止")
                 actions.append("Stp")
                 log_probs.append(torch.tensor(0.0, device=self.device))
-                entropies.append(torch.tensor(0.0, device=self.device))
+
                 continue
 
             # 防御性处理 NaN 和极端值
@@ -88,9 +88,8 @@ class Expander:
                 actions.append(action.item())
 
             log_probs.append(log_prob)
-            entropies.append(entropy)
 
-        return actions, log_probs, entropies
+        return actions, log_probs
 
     def prepare_inputs(self, tra_vector, seed_vector, tra_nodes):
         """
@@ -239,26 +238,23 @@ class Expander:
             )
             batch_logits = self.model(*model_inputs)
 
-            actions, logps, entropies = self.sample_actions(
-                batch_logits, training=False
-            )
+            actions, logps = self.sample_actions(batch_logits, training=False)
 
             for j, orig_idx in enumerate(active_indices):
                 ac = actions[j]
                 logp = logps[j]
-                entropy = entropies[j]
 
                 # 处理空邻居情况：候选列表为空，动作必然为停止
                 if batch_candidates[j] == []:
                     self.add_node("Stp", tra_nodes, tra_sets, orig_idx)
                     tra_logps[orig_idx].append(logp)
-                    tra_entropies[orig_idx].append(entropy)
+
                     continue
 
                 if ac == "Stp" or ac >= len(batch_candidates[j]):
                     self.add_node("Stp", tra_nodes, tra_sets, orig_idx)
                     tra_logps[orig_idx].append(logp)
-                    tra_entropies[orig_idx].append(entropy)
+
                 else:
                     selected_node = batch_candidates[j][ac]
                     newvec = self.add_node(selected_node, tra_nodes, tra_sets, orig_idx)
@@ -268,15 +264,15 @@ class Expander:
                         )
                     # 无论是否重复，都记录logp和entropy
                     tra_logps[orig_idx].append(logp)
-                    tra_entropies[orig_idx].append(entropy)
+
             step += 1
 
-        return tra_nodes, tra_logps, tra_entropies
+        return tra_nodes, tra_logps
 
     def trainReward(self, seeds: List[int], true_coms):
         self.model.train()
 
-        selected_nodes, logps, entropies_list = self.sample_bs_trajectories(seeds)
+        selected_nodes, logps = self.sample_bs_trajectories(seeds)
 
         for name, param in self.model.named_parameters():
             if torch.isnan(param).any():

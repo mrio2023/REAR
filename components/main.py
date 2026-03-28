@@ -9,8 +9,6 @@ DATASET_CONFIGS = {
         "min_community_size": 5,
         "p_bias": 0.2,
         "r_bias": 1.0,
-        "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
         "grad_norm": 1.0,
         "target_recall": 0.8,
         "stop_reward_scale": 2.0,
@@ -19,7 +17,7 @@ DATASET_CONFIGS = {
         "epoch": 70,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 12, 
+        "maxLen": 12,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -28,8 +26,6 @@ DATASET_CONFIGS = {
         # 奖励层面
         "p_bias": 1.0,
         "r_bias": 1.0,
-        "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
         "grad_norm": 1.0,
         "target_recall": 0.5,
         "stop_reward_scale": 2.0,
@@ -48,8 +44,6 @@ DATASET_CONFIGS = {
         "min_community_size": 5,
         "p_bias": 0.8,
         "r_bias": 1.2,
-        "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
         "grad_norm": 1.0,
         "target_recall": 0.8,
         "stop_reward_scale": 2.0,
@@ -66,8 +60,6 @@ DATASET_CONFIGS = {
         "min_community_size": 5,
         "p_bias": 1.0,
         "r_bias": 1.0,
-        "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
         "grad_norm": 1.0,
         "target_recall": 0.8,
         "stop_reward_scale": 2.0,
@@ -84,8 +76,6 @@ DATASET_CONFIGS = {
         "min_community_size": 5,
         "p_bias": 1.0,
         "r_bias": 1.0,
-        "repeat_penalty_coeff": 0.5,
-        "entropy_coeff": 0.01,
         "grad_norm": 10.0,
         "target_recall": 0.5,
         "stop_reward_scale": 2.0,
@@ -113,7 +103,7 @@ def train_single_dataset(dfname: str, seed: int = 2026):
         return None
 
     params = DATASET_CONFIGS[dfname]
-    params["dfname"]=dfname
+    params["dfname"] = dfname
     starter = Starter(params=params)
     try:
 

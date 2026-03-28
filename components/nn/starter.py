@@ -58,8 +58,7 @@ class Starter:
             "f1_base_weight",
             "p_bias",
             "r_bias",
-            "repeat_penalty_coeff",
-            "entropy_coeff",
+ 
             "grad_norm",
             "target_recall",
             "stop_reward_scale",
@@ -105,7 +104,7 @@ class Starter:
         pred_coms_flat: List[List] = []
         if all_seeds_flat:
             with torch.no_grad():
-                pred_coms_flat, _, _ = expander.sample_bs_trajectories(all_seeds_flat)
+                pred_coms_flat, _ = expander.sample_bs_trajectories(all_seeds_flat)
             print(f"推理种子数：{len(all_seeds_flat)}")
 
         community_pred_before: Dict[str, Set] = {
@@ -155,7 +154,7 @@ class Starter:
                     break
 
                 with torch.no_grad():
-                    preds, _, _ = expander.sample_bs_trajectories([best_node])
+                    preds, _= expander.sample_bs_trajectories([best_node])
                 new_nodes = set()
                 for p in preds:
                     new_nodes.update([n for n in p if n != "Stp"])
