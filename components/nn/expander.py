@@ -39,7 +39,7 @@ class Expander:
         )
         print(f"p_bias={p_bias}, r_bias={r_bias}")
         print(f" grad_norm={grad_norm}")
-        print(f"target_recall={target_f1}, stop_reward_scale={stop_reward_scale}")
+        print(f"target_f1={target_f1}, stop_reward_scale={stop_reward_scale}")
 
     def sample_actions(self, logits, training=True):
         """

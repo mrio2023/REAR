@@ -4,6 +4,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from typing import List, Union, Set, Tuple
 import random
 import os
+from typing import Dict, List, Tuple, Set, Any
 
 
 def set_seed(seed: int):
@@ -18,10 +19,6 @@ def set_seed(seed: int):
     os.environ["PYTHONHASHSEED"] = str(seed)
     print(f"✅ 所有随机种子已固定为：{seed}")
 
-
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
-from typing import List, Union, Optional
 
 
 def pruning(
@@ -111,3 +108,48 @@ def eval_scores(
     return round(p, 4), round(r, 4), round(f1, 4)
 
 
+def calculate_prfj(com1: List, com2: List) -> Tuple[float, float, float, float]:
+    """
+    计算单个社区对的 Precision, Recall, F1, Jaccard
+    """
+    p, r, f1 = eval_scores(com1, com2)
+    
+    set1, set2 = set(com1), set(com2)
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
+    jaccard = intersection / union if union > 0 else 0.0
+    
+    return p, r, f1, jaccard
+
+def safe_mean(values: List[float]) -> float:
+    """安全的平均值计算"""
+    return round(np.mean(values) if values else 0.0, 4)
+
+def compute_single_metrics(pred_com: List, true_com: List, metrics_dict: Dict[str, List]) -> None:
+    """
+    计算单组结果并填入字典
+    Args:
+        pred_com: 预测社区列表
+        true_com: 真实社区列表
+        metrics_dict: 用于存储的字典 (会在原地修改)
+    """
+    p, r, f1, j = calculate_prfj(pred_com, true_com)
+    metrics_dict["precision"].append(p)
+    metrics_dict["recall"].append(r)
+    metrics_dict["f1"].append(f1)
+    metrics_dict["jaccard"].append(j)
+
+def aggregate_avg_metrics(metrics_before: Dict[str, List], metrics_after: Dict[str, List]) -> Dict[str, float]:
+    """
+    聚合扩展前后的指标，生成最终报告字典
+    """
+    return {
+        "before_avg_precision": safe_mean(metrics_before["precision"]),
+        "before_avg_recall": safe_mean(metrics_before["recall"]),
+        "before_avg_f1": safe_mean(metrics_before["f1"]),
+        "before_avg_jaccard": safe_mean(metrics_before["jaccard"]),
+        "after_avg_precision": safe_mean(metrics_after["precision"]),
+        "after_avg_recall": safe_mean(metrics_after["recall"]),
+        "after_avg_f1": safe_mean(metrics_after["f1"]),
+        "after_avg_jaccard": safe_mean(metrics_after["jaccard"]),
+    }
