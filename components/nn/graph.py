@@ -18,7 +18,7 @@ class Graph:
             for n in nodes:
                 self.node_to_community[n] = name
 
-        self.embed_dim = 0
+        self.embed_dim = -1
         if features:
             sample_feat = next(iter(features.values()))
             self.embed_dim = (

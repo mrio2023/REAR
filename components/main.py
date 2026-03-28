@@ -65,7 +65,7 @@ DATASET_CONFIGS = {
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 70,
+        "epoch": 42,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 12,
