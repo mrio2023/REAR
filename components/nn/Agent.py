@@ -68,7 +68,6 @@ class Agent(nn.Module):
             if startpoint == endpoint:
                 raise ValueError("Finished Episode!")
 
-            candiLen = candidate_endpoint - startpoint
 
             # 停止节点特征计算
             stop_node = h[startpoint:endpoint].sum(dim=0, keepdim=True)

@@ -117,7 +117,6 @@ class Starter:
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred_before[community_map[idx]].update(valid_nodes)
 
-    
         community_pred_after: Dict[str, Set] = {}
         max_iter = self.params.get("max_iter", 1)
 
@@ -206,14 +205,6 @@ class Starter:
         def safe_mean(values: List[float]) -> float:
             return round(np.mean(values) if values else 0.0, 4)
 
-        def safe_std(values: List[float]) -> float:
-            return round(np.std(values) if len(values) > 1 else 0.0, 4)
-
-        def safe_percent_change(new_val: float, old_val: float) -> float:
-            if old_val == 0:
-                return 100.0 if new_val > 0 else 0.0
-            return round((new_val - old_val) / old_val * 100, 2)
-
         # 平均值
         before_avg_precision = safe_mean(metrics_before["precision"])
         before_avg_recall = safe_mean(metrics_before["recall"])
@@ -236,15 +227,14 @@ class Starter:
             "after_avg_jaccard": after_avg_jaccard,
         }
 
-    
         print("\n" + "=" * 80)
         print("📊 扩展前后指标对比（模型迭代扩展）")
         print("=" * 80)
         print(
-            f"扩展前 | P: {before_avg_precision} | R: {before_avg_recall} | F1: {before_avg_f1}  | Jaccard: {before_avg_jaccard} )"
+            f"扩展前 | P: {before_avg_precision} | R: {before_avg_recall} | F1: {before_avg_f1}  | Jaccard: {before_avg_jaccard} "
         )
         print(
-            f"扩展后 | P: {after_avg_precision} | R: {after_avg_recall} | F1: {after_avg_f1} | Jaccard: {after_avg_jaccard} )"
+            f"扩展后 | P: {after_avg_precision} | R: {after_avg_recall} | F1: {after_avg_f1} | Jaccard: {after_avg_jaccard} "
         )
 
         print("=" * 80)
@@ -302,14 +292,12 @@ class Starter:
                 adj=global_adj,
                 features=global_features,
                 communities=train_communities,
-                node_list=list(all_nodes),
             )
 
             test_g = Graph(
                 adj=global_adj,
                 features=global_features,
                 communities=test_communities,
-                node_list=list(all_nodes),
             )
 
             print(

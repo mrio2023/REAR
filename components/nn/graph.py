@@ -5,39 +5,28 @@ from sklearn.metrics.pairwise import cosine_similarity
 
 class Graph:
     def __init__(
-        self, adj: dict, features: dict, communities: dict, node_list: list = None
+        self, adj: dict, features: dict, communities: dict,
     ):
-        """
-        从预处理数据直接构建图对象。
-
-        :param adj: 邻接表，格式 {node: set(neighbors)}
-        :param features: 节点特征字典，格式 {node: list/ndarray}
-        :param communities: 社区字典，格式 {community_name: list_of_nodes}
-        :param node_list: 可选，所有节点的列表，用于快速遍历
-        """
+        
         self.adj = adj
         self.features = features
         self.communities = communities
-        self.community_seeds = communities  # 添加此行，兼容 eval_model
-
-        # 构建从节点到社区名的映射（用于 sampleTrajectory）
+        self.community_seeds = communities  
+     
         self.node_to_community = {}
         for name, nodes in communities.items():
             for n in nodes:
                 self.node_to_community[n] = name
 
-        # 特征维度
         self.embed_dim = 0
         if features:
             sample_feat = next(iter(features.values()))
             self.embed_dim = (
                 len(sample_feat) if isinstance(sample_feat, (list, np.ndarray)) else 1
             )
-        print(
-            f"初始化 Graph：节点数 {len(adj)}，社区数 {len(communities)}，特征维度 {self.embed_dim}"
-        )
+       
 
-        # 预加载所有节点嵌入（向量化处理）
+       
         self.embed_cache = {}
         for node, feat in features.items():
             if isinstance(feat, list):
