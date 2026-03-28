@@ -326,21 +326,19 @@ class Starter:
                 stop_reward_scale=self.params["stop_reward_scale"],
             )
 
-            train_community_nodes = []
-            for comm in train_communities.values():
-                train_community_nodes.extend(comm)
-            train_community_nodes = list(set(train_community_nodes))
-
-            if len(train_community_nodes) < self.params["seedNum"]:
-                raise ValueError(f"训练社区节点数 {len(train_community_nodes)} 小于每轮采样数 {self.params['seedNum']}")
-
+          
             epoch = self.params["epoch"]
             seedNum = self.params["seedNum"]
+            coms=list(train_g.communities.values())
+
 
             print(f"\n🚀 开始训练：{epoch}轮 | 每轮采样{seedNum}种子")
             for i in range(epoch):
-                seeds = random.sample(train_community_nodes, k=seedNum)
-                true_coms = [train_g.sampleTrajectory(s, maxlen=self.params["maxLen"]) for s in seeds]
+                true_coms=random.sample(coms,k=seedNum)
+                seeds=[]
+                for c in true_coms:
+                    seeds.append(random.choice(c))
+                
                 loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
                 print(f"📝 Epoch {i+1}/{epoch} | loss: {loss:.4f}")
 
