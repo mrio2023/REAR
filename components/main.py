@@ -61,11 +61,11 @@ DATASET_CONFIGS = {
         "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 1.0,
-        "target_f1": 0.8,
+        "target_f1": 0.5,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 42,
+        "epoch": 45,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 12,
@@ -92,33 +92,25 @@ DATASET_CONFIGS = {
 
 
 def train_single_dataset(dfname: str, seed: int = 2026):
-    """训练单个数据集，返回测试指标（纯字典传参）"""
     print(f"开始训练数据集：{dfname} (种子={seed})")
     set_seed(seed=seed)
-
     print("种子是", seed)
-
     if dfname not in DATASET_CONFIGS:
         print(f"数据集 {dfname} 无配置参数，终止训练")
         return None
-
     params = DATASET_CONFIGS[dfname]
     params["dfname"] = dfname
     starter = Starter(params=params)
     try:
-
-        test_metrics = starter.run(dfname=dfname, seed=seed)
-        return test_metrics
+        starter.run(dfname=dfname, seed=seed)
     except Exception as e:
         print(f"\n❌ 数据集 {dfname} 运行失败：{str(e)}")
         import traceback
 
         traceback.print_exc()
-        return None
 
 
 def train_all_datasets(datasets: list, seed: int = 2026):
-
     for dfname in datasets:
         train_single_dataset(dfname, seed=seed)
 
