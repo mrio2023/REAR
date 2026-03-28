@@ -218,6 +218,17 @@ class Starter:
                 seeds = [random.choice(c) for c in true_coms]
                 loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
                 print(f"Epoch {i+1}/{epoch} | loss: {loss:.4f}")
+              # ===================== 【新增】打印全量剪枝统计 =====================
+            print("\n" + "="*60)
+            print(f"📊 训练全过程 剪枝总统计（所有轮次+所有剪枝）")
+            print(f"剪枝总调用次数: {expander.prune_call_count}")
+            print(f"剪枝前总候选节点: {expander.prune_total_original}")
+            print(f"剪枝后保留总节点: {expander.prune_total_kept}")
+            print(f"✅ 累计剪掉总节点: {expander.prune_total_removed}")  # 核心结果
+            if expander.prune_total_original > 0:
+                print(f"总剪枝比例: {expander.prune_total_removed / expander.prune_total_original:.2%}")
+            print("="*60 + "\n")
+            # ==================================================================
 
             # -------------------- 新增：训练 Refiner --------------------
             print("\n开始训练 Refiner...")

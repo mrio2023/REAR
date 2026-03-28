@@ -40,6 +40,13 @@ class Expander:
         print(f"p_bias={p_bias}, r_bias={r_bias}")
         print(f" grad_norm={grad_norm}")
         print(f"target_f1={target_f1}, stop_reward_scale={stop_reward_scale}")
+        
+         # ===================== 消融实验：剪枝统计变量（新增）=====================
+        self.prune_call_count = 0       # 剪枝函数调用总次数
+        self.prune_total_original = 0   # 剪枝前总候选节点数
+        self.prune_total_kept = 0       # 剪枝后保留总节点数
+        self.prune_total_removed = 0    # 累计剪掉的总节点数 ✅ 核心统计值
+        # =====================================================================
 
     def sample_actions(self, logits, training=True):
         """
@@ -68,7 +75,7 @@ class Expander:
             if torch.isnan(batch_logits).any():
 
                 raise ValueError(f"[ERROR] NaN detected in logits at batch index {i}")
-                # batch_logits = torch.nan_to_num(batch_logits, nan=0.0)
+             
             batch_logits = torch.clamp(batch_logits, min=-20, max=20)
 
             dist = torch.distributions.Categorical(logits=batch_logits)
@@ -79,8 +86,7 @@ class Expander:
                 action = torch.argmax(dist.probs)
 
             log_prob = dist.log_prob(action)
-            entropy = dist.entropy()
-
+           
             # 假设停止动作是最后一个动作
             if action == len(dist.probs) - 1:
                 actions.append("Stp")
@@ -118,11 +124,22 @@ class Expander:
             neigh_embed = self.graph.nodesEmbed(unique_neigh)
 
             # 剪枝
+                     # 剪枝 + 消融实验统计（修改部分）
+            self.prune_call_count += 1
+            original_count = len(unique_neigh)  # 剪枝前原始邻居数
+            self.prune_total_original += original_count
+
+            # 执行原剪枝逻辑
             pruned_nodes = pruning(
                 community_pooled_embed=tra_vector[i],
                 neigh_node_embed_list=neigh_embed,
                 neigh_nodes=unique_neigh,
             )
+
+            kept_count = len(pruned_nodes)  # 剪枝后保留数
+            removed_count = original_count - kept_count  # 本次剪掉的节点数
+            self.prune_total_kept += kept_count
+            self.prune_total_removed += removed_count  # 累计剪掉
             idx_map = {node: j for j, node in enumerate(unique_neigh)}
             keep_idx = [idx_map[n] for n in pruned_nodes]
 
@@ -429,5 +446,6 @@ class Expander:
         print(
             f"\nGrad Check | Norm: {grad_norm_val:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}"
         )
-
+       
+   
         return loss.item()
