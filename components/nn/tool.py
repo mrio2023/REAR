@@ -48,7 +48,7 @@ def pruning(
     :param debug: 是否打印调试信息
     :return: 剪枝后的邻居节点ID列表
     """
-    # ========== 1. 输入格式统一（兼容numpy/torch） ==========
+
     if isinstance(community_pooled_embed, torch.Tensor):
         pooled_embed = community_pooled_embed.detach().cpu().numpy()
     else:
@@ -74,48 +74,33 @@ def pruning(
             print("[Pruning] 无邻居节点，返回空列表")
         return []
 
-    # ========== 2. 邻居数 ≤ 阈值时不剪枝 ==========
+
     if num_neigh <= min_neigh_threshold:
         if debug:
             print(f"[Pruning] 邻居数={num_neigh} ≤ {min_neigh_threshold}，不剪枝")
         return neigh_nodes
 
-    # ========== 3. 计算保留数量 ==========
-    keep_num_by_p = max(1, int(num_neigh * top_p_ratio))  # 按比例至少1个
-    keep_num = min(keep_num_by_p, top_k_max)  # 取比例上限和硬上限的较小值
+   
+    keep_num_by_p = max(1, int(num_neigh * top_p_ratio)) 
+    keep_num = min(keep_num_by_p, top_k_max)  
     keep_num = max(
         min_neigh_threshold, keep_num
-    )  # 确保不低于阈值（但此时num_neigh已>阈值，所以至少保留阈值个）
-    # 注意：如果 keep_num 超过 num_neigh，取 num_neigh（但逻辑上不会，因为 keep_num_by_p ≤ num_neigh）
+    )  
     keep_num = min(keep_num, num_neigh)
 
-    # ========== 4. 计算余弦相似度并排序 ==========
     sim_scores = cosine_similarity(pooled_embed, neigh_embeds)[0]
     sorted_indices = np.argsort(sim_scores)[::-1]
     top_indices = sorted_indices[:keep_num]
     pruned_neigh_nodes = [neigh_nodes[idx] for idx in top_indices]
 
-    # ========== 5. 调试输出 ==========
-    if debug:
-        min_sim = sim_scores[top_indices[-1]] if keep_num > 0 else 0.0
-        print(
-            f"[Pruning] 原始={num_neigh}, 保留={keep_num}, "
-            f"比例={keep_num/num_neigh:.2f}, 最小相似度={min_sim:.4f}, "
-            f"阈值设置: top_k_max={top_k_max}, top_p_ratio={top_p_ratio}, min_thresh={min_neigh_threshold}"
-        )
-
+   
     return pruned_neigh_nodes
 
 
 def eval_scores(
     pred_comm: Union[List, Set], true_comm: Union[List, Set]
 ) -> Tuple[float, float, float]:
-    """
-    【静态函数】计算精确率(P)、召回率(R)、F1分数
-    :param pred_comm: 预测的社区节点列表/集合
-    :param true_comm: 真实的社区节点列表/集合
-    :return: (precision, recall, f1) 保留4位小数
-    """
+    
     pred_set = set(pred_comm) if isinstance(pred_comm, list) else pred_comm
     true_set = set(true_comm) if isinstance(true_comm, list) else true_comm
 
@@ -126,25 +111,3 @@ def eval_scores(
     return round(p, 4), round(r, 4), round(f1, 4)
 
 
-def eval_f1(pred_comm: Union[List, Set], true_comm: Union[List, Set]) -> float:
-    """
-    【静态函数】单独计算F1分数（临时偏向Recall）
-    :param pred_comm: 预测的社区节点列表/集合
-    :param true_comm: 真实的社区节点列表/集合
-    :return: 偏向Recall的F1分数（浮点型）
-    """
-    pred_set = set(pred_comm) if isinstance(pred_comm, list) else pred_comm
-    true_set = set(true_comm) if isinstance(true_comm, list) else true_comm
-
-    intersect = true_set & pred_set
-    p = len(intersect) / len(pred_set) if pred_set else 0.0
-    r = len(intersect) / len(true_set) if true_set else 0.0
-
-    # ========== 核心修改：给Recall加权重 ==========
-    r_weight = 80  # Recall权重（可调：1.2-2.0，越大越偏向Recall）
-    weighted_r = r * r_weight
-    # ========== 替代原有F1计算 ==========
-
-    if (p + weighted_r) <= 0:
-        return 0.0
-    return 2 * p * weighted_r / (p + weighted_r)  # 用加权后的Recall计算F1
