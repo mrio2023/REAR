@@ -5,17 +5,18 @@ import random
 from .expander import Expander
 from .graph import Graph
 from .tool import pruning
+from typing import List
 
 class Refiner:
     def __init__(self, train_g: Graph, expander: Expander):
         self.expander = expander
         self.train_g = train_g
-        self.clf = None          # 训练后的分类器
-        self.scaler = None       # 标准化器
+        self.clf = None  # 训练后的分类器
+        self.scaler = None  # 标准化器
 
     def getTraVec(self, pred_com):
         """计算社区平均嵌入和节点嵌入列表"""
-        embeds = self.train_g.nodesEmbed(pred_com)   # shape: (len(pred_com), embed_dim)
+        embeds = self.train_g.nodesEmbed(pred_com)  # shape: (len(pred_com), embed_dim)
         avg_emb = np.mean(embeds, axis=0)
         return avg_emb, embeds
 
@@ -40,14 +41,12 @@ class Refiner:
                 neighs.append([])
                 continue
 
-            # 计算社区平均嵌入和邻居节点嵌入
             avg_emb, com_embeds = self.getTraVec(com)
-            # 提取邻居节点的嵌入（注意：getNodesNeigh 返回节点ID列表，需要对应嵌入）
-            neigh_embeds = self.train_g.nodesEmbed(unique_neigh)   # shape: (len(unique_neigh), embed_dim)
 
-            # 剪枝（保留与社区最相似的节点）
-            # 注意：pruning 函数需要传入社区平均嵌入和邻居节点嵌入列表（或矩阵）
-            # 假设 pruning 函数定义在 tool 中，返回剪枝后的节点列表（按相似度排序）
+            neigh_embeds = self.train_g.nodesEmbed(
+                unique_neigh
+            )  # shape: (len(unique_neigh), embed_dim)
+
             pruned_nodes = pruning(
                 community_pooled_embed=avg_emb,
                 neigh_node_embed_list=neigh_embeds,
@@ -77,8 +76,10 @@ class Refiner:
                 # 为了简单，我们先复用之前实验中的特征提取（但这里可以简化，只用嵌入）
                 # 这里我们使用节点嵌入和社区平均嵌入的差值作为特征（更简单）
                 node_emb = self.train_g.singleNodeEmbed(node)
-                avg_emb, _ = self.getTraVec(pred)   # 重新计算当前社区的平均嵌入（因为 pred 就是当前粗糙社区）
-                feat = np.concatenate([node_emb, avg_emb])   # 拼接两个嵌入
+                avg_emb, _ = self.getTraVec(
+                    pred
+                )  # 重新计算当前社区的平均嵌入（因为 pred 就是当前粗糙社区）
+                feat = np.concatenate([node_emb, avg_emb])  # 拼接两个嵌入
                 X_keep.append(feat)
                 y_keep.append(1 if node in true_set else 0)
 
@@ -100,10 +101,10 @@ class Refiner:
             n_estimators=100,
             max_depth=4,
             learning_rate=0.1,
-            scale_pos_weight=(len(y_keep)-np.sum(y_keep))/np.sum(y_keep),
+            scale_pos_weight=(len(y_keep) - np.sum(y_keep)) / np.sum(y_keep),
             random_state=42,
-            eval_metric='logloss',
-            use_label_encoder=False
+            eval_metric="logloss",
+            use_label_encoder=False,
         )
         clf.fit(X_scaled, y_keep)
 
@@ -114,7 +115,32 @@ class Refiner:
         # 打印训练集上的简单评估
         y_pred = clf.predict(X_scaled)
         from sklearn.metrics import classification_report
+
         print("\n【训练集上分类报告】")
-        print(classification_report(y_keep, y_pred, target_names=['剔除', '保留']))
+        print(classification_report(y_keep, y_pred, target_names=["剔除", "保留"]))
 
         print("Refiner 训练完成（未保存）")
+
+    def refine_community(
+        self, comm_nodes: List[int], threshold: float = 0.5
+    ) -> List[int]:
+        """精炼单个社区"""
+        if self.clf is None or self.scaler is None:
+            print("⚠️ Refiner 未训练，返回原始社区")
+            return comm_nodes
+
+        if not comm_nodes:
+            return []
+
+        avg_emb, _ = self.getTraVec(comm_nodes)
+        X = []
+        for node in comm_nodes:
+            node_emb = self.train_g.singleNodeEmbed(node)
+            feat = np.concatenate([node_emb, avg_emb])
+            X.append(feat)
+
+        X = np.array(X)
+        X_scaled = self.scaler.transform(X)
+        prob = self.clf.predict_proba(X_scaled)[:, 1]
+        refined_nodes = [node for node, p in zip(comm_nodes, prob) if p >= threshold]
+        return refined_nodes

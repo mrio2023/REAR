@@ -182,7 +182,7 @@ class Starter:
             # -------------------- 新增：训练 Refiner --------------------
             print("\n开始训练 Refiner...")
             refiner = Refiner(train_g, expander)
-            refiner.train()
+            refiner.trainRefiner()
             # ---------------------------------------------------------
 
             # 测试：应用 Refiner
