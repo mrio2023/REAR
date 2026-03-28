@@ -1,15 +1,11 @@
 import torch
 import os
-from nn.starter import Starter  
+from nn.starter import Starter
 from nn.tool import set_seed
 
 
 DATASET_CONFIGS = {
     "ibm_h_small": {
-        # 基础参数
-        "dfname": "ibm_h_small",
-        "normal_node_ratio": 3,
-        "expand_hop": 2,
         "min_community_size": 5,
         "p_bias": 0.2,
         "r_bias": 1.0,
@@ -23,16 +19,11 @@ DATASET_CONFIGS = {
         "epoch": 70,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 12,  # 可能比small稍大
+        "maxLen": 12, 
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
     "elliptic": {
-        # 基础参数
-        "dfname": "elliptic",
-        # 数据层面
-        "normal_node_ratio": 2,
-        "expand_hop": 2,
         "min_community_size": 2,
         # 奖励层面
         "p_bias": 1.0,
@@ -54,9 +45,6 @@ DATASET_CONFIGS = {
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
     "ibm_h_medium": {
-        "dfname": "ibm_h_medium",
-        "normal_node_ratio": 3,
-        "expand_hop": 2,
         "min_community_size": 5,
         "p_bias": 0.8,
         "r_bias": 1.2,
@@ -75,9 +63,6 @@ DATASET_CONFIGS = {
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
     "ibm_l_medium": {
-        "dfname": "ibm_l_medium",
-        "normal_node_ratio": 3,
-        "expand_hop": 2,
         "min_community_size": 5,
         "p_bias": 1.0,
         "r_bias": 1.0,
@@ -96,10 +81,7 @@ DATASET_CONFIGS = {
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
     "dgraph": {
-        "dfname": "dgraph",
-        "normal_node_ratio": 5,  
-        "expand_hop": 2,  
-        "min_community_size": 5,  
+        "min_community_size": 5,
         "p_bias": 1.0,
         "r_bias": 1.0,
         "repeat_penalty_coeff": 0.5,
@@ -115,7 +97,7 @@ DATASET_CONFIGS = {
         "maxLen": 10,  # 可能需更长路径
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
-    }
+    },
 }
 
 
@@ -125,15 +107,16 @@ def train_single_dataset(dfname: str, seed: int = 2026):
     set_seed(seed=seed)
 
     print("种子是", seed)
-   
+
     if dfname not in DATASET_CONFIGS:
         print(f"数据集 {dfname} 无配置参数，终止训练")
         return None
 
     params = DATASET_CONFIGS[dfname]
+    params["dfname"]=dfname
     starter = Starter(params=params)
     try:
-       
+
         test_metrics = starter.run(dfname=dfname, seed=seed)
         return test_metrics
     except Exception as e:
@@ -145,14 +128,13 @@ def train_single_dataset(dfname: str, seed: int = 2026):
 
 
 def train_all_datasets(datasets: list, seed: int = 2026):
-  
+
     for dfname in datasets:
         train_single_dataset(dfname, seed=seed)
-  
 
 
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "dgraph"]
+    dataset_list = ["dgraph"]
     train_all_datasets(dataset_list, seed=2026)
