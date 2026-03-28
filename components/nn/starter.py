@@ -14,6 +14,7 @@ from .dataProcess import PreprocessedDataLoader
 
 class Tee:
     """将输出同时写入文件和终端"""
+
     def __init__(self, file, stream):
         self.file = file
         self.stream = stream
@@ -47,10 +48,23 @@ class Starter:
                 - 可选: max_iter (默认2)
         """
         required_params = [
-            "dfname", "min_community_size",
-            "device", "hidden_size", "lr", "maxLen", "gamma", "f1_base_weight",
-            "p_bias", "r_bias", "repeat_penalty_coeff", "entropy_coeff",
-            "grad_norm", "target_recall", "stop_reward_scale", "epoch", "seedNum"
+            "dfname",
+            "min_community_size",
+            "device",
+            "hidden_size",
+            "lr",
+            "maxLen",
+            "gamma",
+            "f1_base_weight",
+            "p_bias",
+            "r_bias",
+            "repeat_penalty_coeff",
+            "entropy_coeff",
+            "grad_norm",
+            "target_recall",
+            "stop_reward_scale",
+            "epoch",
+            "seedNum",
         ]
         for param in required_params:
             if param not in params:
@@ -77,7 +91,9 @@ class Starter:
             sample_num = 1
             test_seeds[name_tag] = random.sample(addr_list, k=sample_num)
 
-        print(f"测试：真实社区 {len(true_coms)}，总种子 {sum(len(v) for v in test_seeds.values())}")
+        print(
+            f"测试：真实社区 {len(true_coms)}，总种子 {sum(len(v) for v in test_seeds.values())}"
+        )
         print("-" * 60)
 
         all_seeds_flat: List = []
@@ -92,14 +108,16 @@ class Starter:
                 pred_coms_flat, _, _ = expander.sample_bs_trajectories(all_seeds_flat)
             print(f"推理种子数：{len(all_seeds_flat)}")
 
-        community_pred_before: Dict[str, Set] = {tag: set() for tag in test_seeds.keys()}
+        community_pred_before: Dict[str, Set] = {
+            tag: set() for tag in test_seeds.keys()
+        }
         for idx, pred_com in enumerate(pred_coms_flat):
             if idx >= len(community_map):
                 continue
             valid_nodes = [n for n in pred_com if n != "Stp"]
             community_pred_before[community_map[idx]].update(valid_nodes)
 
-        # ================== 迭代扩展：每次选社区内最相似节点作为种子 ==================
+    
         community_pred_after: Dict[str, Set] = {}
         max_iter = self.params.get("max_iter", 1)
 
@@ -158,7 +176,12 @@ class Starter:
             # 扩展前
             pred_before = list(community_pred_before.get(name_tag, set()))
             p_b, r_b, f1_b = eval_scores(pred_before, true_addr)
-            j_b = len(set(pred_before) & set(true_addr)) / len(set(pred_before) | set(true_addr)) if len(set(pred_before) | set(true_addr)) > 0 else 0.0
+            j_b = (
+                len(set(pred_before) & set(true_addr))
+                / len(set(pred_before) | set(true_addr))
+                if len(set(pred_before) | set(true_addr)) > 0
+                else 0.0
+            )
 
             metrics_before["precision"].append(p_b)
             metrics_before["recall"].append(r_b)
@@ -168,7 +191,12 @@ class Starter:
             # 扩展后
             pred_after = list(community_pred_after.get(name_tag, set()))
             p_a, r_a, f1_a = eval_scores(pred_after, true_addr)
-            j_a = len(set(pred_after) & set(true_addr)) / len(set(pred_after) | set(true_addr)) if len(set(pred_after) | set(true_addr)) > 0 else 0.0
+            j_a = (
+                len(set(pred_after) & set(true_addr))
+                / len(set(pred_after) | set(true_addr))
+                if len(set(pred_after) | set(true_addr)) > 0
+                else 0.0
+            )
 
             metrics_after["precision"].append(p_a)
             metrics_after["recall"].append(r_a)
@@ -197,46 +225,28 @@ class Starter:
         after_avg_f1 = safe_mean(metrics_after["f1"])
         after_avg_jaccard = safe_mean(metrics_after["jaccard"])
 
-        # 标准差
-        before_std_f1 = safe_std(metrics_before["f1"])
-        after_std_f1 = safe_std(metrics_after["f1"])
-        before_std_jaccard = safe_std(metrics_before["jaccard"])
-        after_std_jaccard = safe_std(metrics_after["jaccard"])
-
-        # 变化率
-        f1_imp = safe_percent_change(after_avg_f1, before_avg_f1)
-        recall_imp = safe_percent_change(after_avg_recall, before_avg_recall)
-        precision_change = safe_percent_change(after_avg_precision, before_avg_precision)
-        jaccard_change = safe_percent_change(after_avg_jaccard, before_avg_jaccard)
-
         avg_metrics = {
             "before_avg_precision": before_avg_precision,
             "before_avg_recall": before_avg_recall,
             "before_avg_f1": before_avg_f1,
             "before_avg_jaccard": before_avg_jaccard,
-            "before_std_f1": before_std_f1,
-            "before_std_jaccard": before_std_jaccard,
-
             "after_avg_precision": after_avg_precision,
             "after_avg_recall": after_avg_recall,
             "after_avg_f1": after_avg_f1,
             "after_avg_jaccard": after_avg_jaccard,
-            "after_std_f1": after_std_f1,
-            "after_std_jaccard": after_std_jaccard,
-
-            "f1_improvement": f1_imp,
-            "recall_improvement": recall_imp,
-            "precision_change": precision_change,
-            "jaccard_change": jaccard_change,
         }
 
-        # ================== 打印输出（带 Jaccard） ==================
+    
         print("\n" + "=" * 80)
         print("📊 扩展前后指标对比（模型迭代扩展）")
         print("=" * 80)
-        print(f"扩展前 | P: {before_avg_precision} | R: {before_avg_recall} | F1: {before_avg_f1} (±{before_std_f1}) | Jaccard: {before_avg_jaccard} (±{before_std_jaccard})")
-        print(f"扩展后 | P: {after_avg_precision} | R: {after_avg_recall} | F1: {after_avg_f1} (±{after_std_f1}) | Jaccard: {after_avg_jaccard} (±{after_std_jaccard})")
-        print(f"变化幅度 | P: {precision_change}% | R: {recall_imp}% | F1: {f1_imp}% | Jaccard: {jaccard_change}%")
+        print(
+            f"扩展前 | P: {before_avg_precision} | R: {before_avg_recall} | F1: {before_avg_f1}  | Jaccard: {before_avg_jaccard} )"
+        )
+        print(
+            f"扩展后 | P: {after_avg_precision} | R: {after_avg_recall} | F1: {after_avg_f1} | Jaccard: {after_avg_jaccard} )"
+        )
+
         print("=" * 80)
 
         return avg_metrics
@@ -263,18 +273,20 @@ class Starter:
             tee = Tee(f, original_stdout)
             sys.stdout = tee
 
-            print(f"\n{'='*70}\n📌 数据集：{dfname}  seed={seed}\n{'='*70}")
-            print(f"核心参数：min_community_size={self.params['min_community_size']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}")
+            print(f" 数据集：{dfname}  seed={seed}")
+            print(
+                f"核心参数：min_community_size={self.params['min_community_size']}, epoch={self.params['epoch']}, seedNum={self.params['seedNum']}"
+            )
             print("-" * 70)
 
             loader = PreprocessedDataLoader(
                 dataset_name=dfname,
                 train_ratio=0.8,
                 min_com_size=self.params["min_community_size"],
-                seed=seed
+                seed=seed,
             )
 
-            global_adj = loader.graph['adj']
+            global_adj = loader.graph["adj"]
             global_features = loader.nodefeats
             all_nodes = set(global_adj.keys())
 
@@ -290,18 +302,22 @@ class Starter:
                 adj=global_adj,
                 features=global_features,
                 communities=train_communities,
-                node_list=list(all_nodes)
+                node_list=list(all_nodes),
             )
 
             test_g = Graph(
                 adj=global_adj,
                 features=global_features,
                 communities=test_communities,
-                node_list=list(all_nodes)
+                node_list=list(all_nodes),
             )
 
-            print(f"训练图：节点数 {train_g.n_nodes}，特征维度 {train_g.embedsize}，训练社区数 {len(train_communities)}")
-            print(f"测试图：节点数 {test_g.n_nodes}，特征维度 {test_g.embedsize}，测试社区数 {len(test_communities)}")
+            print(
+                f"训练图：节点数 {train_g.n_nodes}，特征维度 {train_g.embedsize}，训练社区数 {len(train_communities)}"
+            )
+            print(
+                f"测试图：节点数 {test_g.n_nodes}，特征维度 {test_g.embedsize}，测试社区数 {len(test_communities)}"
+            )
 
             device = torch.device(self.params["device"])
             model = Agent(
@@ -326,23 +342,21 @@ class Starter:
                 stop_reward_scale=self.params["stop_reward_scale"],
             )
 
-          
             epoch = self.params["epoch"]
             seedNum = self.params["seedNum"]
-            coms=list(train_g.communities.values())
+            coms = list(train_g.communities.values())
 
-
-            print(f"\n🚀 开始训练：{epoch}轮 | 每轮采样{seedNum}种子")
+            print(f"开始训练：{epoch}轮 | 每轮采样{seedNum}种子")
             for i in range(epoch):
-                true_coms=random.sample(coms,k=seedNum)
-                seeds=[]
+                true_coms = random.sample(coms, k=seedNum)
+                seeds = []
                 for c in true_coms:
                     seeds.append(random.choice(c))
-                
-                loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
-                print(f"📝 Epoch {i+1}/{epoch} | loss: {loss:.4f}")
 
-            print(f"\n{'='*70}\n🧪 开始测试（真实社区+动态采样种子）\n{'='*70}")
+                loss = expander.trainReward(seeds=seeds, true_coms=true_coms)
+                print(f"Epoch {i+1}/{epoch} | loss: {loss:.4f}")
+
+            print(f"开始测试（真实社区+动态采样种子）")
             expander.graph = test_g
             test_metrics = self.eval_model(expander, test_g)
 
