@@ -38,9 +38,13 @@ class Expander:
         self.target_recall = target_recall
         self.stop_reward_scale = stop_reward_scale
 
-        print(f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight},device={self.device}")
-        print(f"p_bias={p_bias}, r_bias={r_bias}, repeat_penalty={repeat_penalty_coeff}")
-        print(f"entropy_coeff={entropy_coeff}, grad_norm={grad_norm}")
+        print(
+            f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight},device={self.device}"
+        )
+        print(
+            f"p_bias={p_bias}, r_bias={r_bias}, repeat_penalty={repeat_penalty_coeff}"
+        )
+        print(f" grad_norm={grad_norm}")
         print(f"target_recall={target_recall}, stop_reward_scale={stop_reward_scale}")
 
     def sample_actions(self, logits, training=True):
@@ -138,7 +142,11 @@ class Expander:
             # 转为张量
             if not isinstance(neigh_embed, torch.Tensor):
                 neigh_embed = torch.tensor(
-                    np.stack(neigh_embed) if isinstance(neigh_embed, list) else neigh_embed,
+                    (
+                        np.stack(neigh_embed)
+                        if isinstance(neigh_embed, list)
+                        else neigh_embed
+                    ),
                     dtype=torch.float32,
                     device=self.device,
                 )
@@ -154,7 +162,9 @@ class Expander:
             t_seed_vector.append(seed_vector[i].unsqueeze(0))
 
             choices.append(unique_neigh)
-            indptr.append((offset, offset + 1 + len(unique_neigh), offset + len(unique_neigh)))
+            indptr.append(
+                (offset, offset + 1 + len(unique_neigh), offset + len(unique_neigh))
+            )
             offset += len(unique_neigh) + 1
 
         # 构建最终张量
@@ -169,7 +179,7 @@ class Expander:
                 # 在 prepare_inputs 的最后，return 之前添加：
         if torch.isnan(seed_embed).any() or torch.isnan(tra_embed).any():
             raise ValueError("[ERROR] NaN in seed_embed or tra_embed")
-           
+
         return seed_embed, tra_embed, np.array(indptr), choices
 
     def add_node(self, new_node, tra_nodes, tra_sets, index):
@@ -195,7 +205,7 @@ class Expander:
         return embed
 
     def all_done(self):
-        return all(self.done) if hasattr(self, 'done') else False
+        return all(self.done) if hasattr(self, "done") else False
 
     def vecpool(self, v1, v2, k):
         return (v1 * (k - 1) + v2) / k
@@ -229,14 +239,16 @@ class Expander:
             active_tra_nodes = [tra_nodes[i] for i in active_indices]
             active_tra_vector = [tra_vector[i] for i in active_indices]
             active_seed_vector = [seed_vector[i] for i in active_indices]
-            active_tra_sets = [tra_sets[i] for i in active_indices]
+        
 
             *model_inputs, batch_candidates = self.prepare_inputs(
                 active_tra_vector, active_seed_vector, active_tra_nodes
             )
             batch_logits = self.model(*model_inputs)
 
-            actions, logps, entropies = self.sample_actions(batch_logits, training=False)
+            actions, logps, entropies = self.sample_actions(
+                batch_logits, training=False
+            )
 
             for j, orig_idx in enumerate(active_indices):
                 ac = actions[j]
@@ -272,19 +284,19 @@ class Expander:
         self.model.train()
 
         selected_nodes, logps, entropies_list = self.sample_bs_trajectories(seeds)
-                # 在 sample_bs_trajectories 之后
+        
         for name, param in self.model.named_parameters():
             if torch.isnan(param).any():
                 print(f"NaN in param: {name}")
-        # 检查种子嵌入
+    
         seed_embed = self.graph.nodesEmbed(seeds)
         if np.isnan(seed_embed).any():
             print("NaN in seed_embed")
-        # 在 prepare_inputs 中检查 tra_vector 和 seed_vector
+      
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
 
-        # 统计batch指标（仅用于监控）
+      
         p_list, r_list, f1_list, pred_len_list = [], [], [], []
         len_true_sum = 0
         for pred_com, true_com in zip(selected_nodes, true_coms):
@@ -301,9 +313,11 @@ class Expander:
         batch_precision = np.mean(p_list)
         batch_f1 = np.mean(f1_list)
         avg_ext_len = np.mean(pred_len_list)
-        early_stop_prob = sum(self.done) / len(self.done) if len(self.done) > 0 else 0.0
-        print(f"提前终止的概率 {early_stop_prob:.3f}")
-        print(f"Batch Metrics: P={batch_precision:.4f}, R={batch_recall:.4f}, F1={batch_f1:.4f}, AvgExtLen={avg_ext_len:.2f}")
+        
+      
+        print(
+            f"Batch Metrics: P={batch_precision:.4f}, R={batch_recall:.4f}, F1={batch_f1:.4f}, AvgExtLen={avg_ext_len:.2f}"
+        )
 
         # ========== 改进的奖励计算 ==========
         rewards_list = []
@@ -345,12 +359,9 @@ class Expander:
                 precision_inc = curr_p - pre_p
 
                 # 加权奖励
-                base_reward = (recall_inc * self.r_bias + precision_inc * self.p_bias) * self.f1_base_weight
-
-                # # 长度惩罚（线性更温和）
-                # if len(temp_set) > true_com_len:
-                #     penalty = max(1.0 - 0.1 * (len(temp_set) - true_com_len), 0.0)
-                #     base_reward *= penalty
+                base_reward = (
+                    recall_inc * self.r_bias + precision_inc * self.p_bias
+                ) * self.f1_base_weight
 
                 step_rewards.append(base_reward)
 
@@ -366,58 +377,69 @@ class Expander:
             rewards_list.append(discounted)
 
         # 填充到相同长度
-        max_len_pad = max(max(len(r) for r in rewards_list), max(len(lp) for lp in logps))
+        max_len_pad = max(
+            max(len(r) for r in rewards_list), max(len(lp) for lp in logps)
+        )
         rewards_padded = np.zeros((bs, max_len_pad))
         for i, r in enumerate(rewards_list):
-            rewards_padded[i, :len(r)] = r
+            rewards_padded[i, : len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
         # 构建mask（有效步数 = 轨迹长度-1，因为种子无动作）
-        mask = (torch.arange(max_len_pad, device=self.device).expand(bs, -1) < (lengths - 1).unsqueeze(1)).float()
+        mask = (
+            torch.arange(max_len_pad, device=self.device).expand(bs, -1)
+            < (lengths - 1).unsqueeze(1)
+        ).float()
 
         # 构建log_probs张量
         logps_padded = []
         for lp_list in logps:
             padded = [
-                lp_list[j] if j < len(lp_list) else torch.tensor(0.0, device=self.device)
+                (
+                    lp_list[j]
+                    if j < len(lp_list)
+                    else torch.tensor(0.0, device=self.device)
+                )
                 for j in range(max_len_pad)
             ]
             logps_padded.append(torch.stack(padded))
         logps = torch.stack(logps_padded)
 
-        # 构建熵张量（用于正则）
-        entropies_padded = []
-        for e_list in entropies_list:
-            padded = [
-                e_list[j] if j < len(e_list) else torch.tensor(0.0, device=self.device)
-                for j in range(max_len_pad)
-            ]
-            entropies_padded.append(torch.stack(padded))
-        entropies = torch.stack(entropies_padded)
-
         # 策略梯度损失
         pg_loss = -(rewards.detach() * logps * mask).sum()
-        # 熵正则（鼓励探索）
-        avg_entropy = (entropies * mask).sum() / mask.sum()
-        loss = pg_loss - self.entropy_coeff * avg_entropy
 
-        print(f"Loss | PG: {pg_loss.item():.4f}, Entropy: {avg_entropy.item():.4f}, Total: {loss.item():.4f}")
+        loss = pg_loss
+
+        print(f"Loss | PG: {pg_loss.item():.4f}, Total: {loss.item():.4f}")
 
         self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
-        grad_norm_val = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=self.grad_norm)
+        grad_norm_val = torch.nn.utils.clip_grad_norm_(
+            self.model.parameters(), max_norm=self.grad_norm
+        )
         self.optimizer.step()
 
         # 监控梯度
         param_mean = torch.mean(
-            torch.stack([p.data.mean() for p in self.model.parameters() if p.requires_grad])
+            torch.stack(
+                [p.data.mean() for p in self.model.parameters() if p.requires_grad]
+            )
         )
         grad_mean = torch.mean(
-            torch.stack([
-                p.grad.mean() if p.grad is not None else torch.tensor(0.0, device=self.device)
-                for p in self.model.parameters() if p.requires_grad
-            ])
+            torch.stack(
+                [
+                    (
+                        p.grad.mean()
+                        if p.grad is not None
+                        else torch.tensor(0.0, device=self.device)
+                    )
+                    for p in self.model.parameters()
+                    if p.requires_grad
+                ]
+            )
         )
-        print(f"\nGrad Check | Norm: {grad_norm_val:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}")
+        print(
+            f"\nGrad Check | Norm: {grad_norm_val:.4f} | Param Mean: {param_mean:.4f} | Grad Mean: {grad_mean:.4f}"
+        )
 
         return loss.item()
