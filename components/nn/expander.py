@@ -16,8 +16,6 @@ class Expander:
         f1_base_weight: float,
         p_bias: float,
         r_bias: float,
-        repeat_penalty_coeff: float,
-        entropy_coeff: float,
         grad_norm: float,
         target_recall: float,
         stop_reward_scale: float,
@@ -32,18 +30,14 @@ class Expander:
         self.f1_base_weight = f1_base_weight
         self.p_bias = p_bias
         self.r_bias = r_bias
-        self.repeat_penalty_coeff = repeat_penalty_coeff
-        self.entropy_coeff = entropy_coeff
+
         self.grad_norm = grad_norm
-        self.target_recall = target_recall
         self.stop_reward_scale = stop_reward_scale
 
         print(
             f"初始化 Expander: maxLen={maxLen}, gamma={gamma}, f1_base_weight={f1_base_weight},device={self.device}"
         )
-        print(
-            f"p_bias={p_bias}, r_bias={r_bias}, repeat_penalty={repeat_penalty_coeff}"
-        )
+        print(f"p_bias={p_bias}, r_bias={r_bias}")
         print(f" grad_norm={grad_norm}")
         print(f"target_recall={target_recall}, stop_reward_scale={stop_reward_scale}")
 
@@ -239,7 +233,6 @@ class Expander:
             active_tra_nodes = [tra_nodes[i] for i in active_indices]
             active_tra_vector = [tra_vector[i] for i in active_indices]
             active_seed_vector = [seed_vector[i] for i in active_indices]
-        
 
             *model_inputs, batch_candidates = self.prepare_inputs(
                 active_tra_vector, active_seed_vector, active_tra_nodes
@@ -284,19 +277,18 @@ class Expander:
         self.model.train()
 
         selected_nodes, logps, entropies_list = self.sample_bs_trajectories(seeds)
-        
+
         for name, param in self.model.named_parameters():
             if torch.isnan(param).any():
                 print(f"NaN in param: {name}")
-    
+
         seed_embed = self.graph.nodesEmbed(seeds)
         if np.isnan(seed_embed).any():
             print("NaN in seed_embed")
-      
+
         bs = len(seeds)
         lengths = torch.LongTensor([len(x) for x in selected_nodes]).to(self.device)
 
-      
         p_list, r_list, f1_list, pred_len_list = [], [], [], []
         len_true_sum = 0
         for pred_com, true_com in zip(selected_nodes, true_coms):
@@ -313,8 +305,7 @@ class Expander:
         batch_precision = np.mean(p_list)
         batch_f1 = np.mean(f1_list)
         avg_ext_len = np.mean(pred_len_list)
-        
-      
+
         print(
             f"Batch Metrics: P={batch_precision:.4f}, R={batch_recall:.4f}, F1={batch_f1:.4f}, AvgExtLen={avg_ext_len:.2f}"
         )
@@ -326,18 +317,15 @@ class Expander:
             temp_set = {com[0]}
             true_com_set = set(true_com)
             true_com_len = len(true_com_set)
-            repeat_count = 0
+
             step_rewards = []
 
             for node in com[1:]:
-                # 重复节点惩罚（不停止，只给负奖励）
+
                 if node != "Stp" and node in temp_set:
-                    repeat_count += 1
-                    step_rewards.append(-self.repeat_penalty_coeff * repeat_count)
-                    continue  # 不加入节点，但继续循环
+                    raise ValueError("has same node")
 
                 if node == "Stp":
-                    # 停止奖励：基于当前召回与目标召回的差距
                     curr_r = len(temp_set & true_com_set) / true_com_len
                     stop_reward = (curr_r - self.target_recall) * self.stop_reward_scale
                     step_rewards.append(stop_reward)
@@ -385,7 +373,6 @@ class Expander:
             rewards_padded[i, : len(r)] = r
         rewards = torch.from_numpy(rewards_padded).float().to(self.device)
 
-        # 构建mask（有效步数 = 轨迹长度-1，因为种子无动作）
         mask = (
             torch.arange(max_len_pad, device=self.device).expand(bs, -1)
             < (lengths - 1).unsqueeze(1)

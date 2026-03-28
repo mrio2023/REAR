@@ -278,7 +278,6 @@ class Starter:
 
             global_adj = loader.graph["adj"]
             global_features = loader.nodefeats
-          
 
             train_communities = {}
             for idx, comm in enumerate(loader.train_comms):
@@ -323,8 +322,6 @@ class Starter:
                 f1_base_weight=self.params["f1_base_weight"],
                 p_bias=self.params["p_bias"],
                 r_bias=self.params["r_bias"],
-                repeat_penalty_coeff=self.params["repeat_penalty_coeff"],
-                entropy_coeff=self.params["entropy_coeff"],
                 grad_norm=self.params["grad_norm"],
                 target_recall=self.params["target_recall"],
                 stop_reward_scale=self.params["stop_reward_scale"],
