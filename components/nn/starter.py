@@ -188,6 +188,8 @@ class Starter:
             # 测试：应用 Refiner
             print("\n开始测试（真实社区+动态采样种子）")
             expander.graph = test_g
+            # 测试前切换图
+            refiner.train_g = test_g
             self.eval_model(expander, test_g, refiner=refiner)
 
             # 可选：对比无 Refiner 的效果（可注释掉）
