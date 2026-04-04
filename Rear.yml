@@ -1,4 +1,4 @@
-name: pies
+name: Rear
 channels:
   - conda-forge
   - defaults
@@ -10,5 +10,4 @@ dependencies:
   - xgboost
   - pandas
   - pip:
-      - torch==2.9.0
-      - torch-npu==2.9.0
+      - torch==2.9.0  

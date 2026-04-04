@@ -73,9 +73,9 @@ DATASET_CONFIGS = {
         "device":  "cpu",
     },
     "dgraph": {
-        "min_community_size": 3,
+        "min_community_size": 1,
         "p_bias": 1.0,
-        "r_bias": 1.3,
+        "r_bias": 1.0,
         "grad_norm": 10.0,
         "target_f1": 0.4,
         "stop_reward_scale": 2.0,
@@ -84,7 +84,7 @@ DATASET_CONFIGS = {
         "epoch": 70,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 10,  # 可能需更长路径
+        "maxLen": 2,  # 可能需更长路径
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -118,5 +118,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "dgraph"]
+    dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
     train_all_datasets(dataset_list, seed=2026)

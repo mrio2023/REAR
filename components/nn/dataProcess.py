@@ -14,7 +14,7 @@ class DataLoader:
         :param seed: 随机种子
         """
         self.dataset = dataset_name
-        self.root = "/root/autodl-tmp/codes/df/SnapData"
+        self.root = "D:\CodeSummary\sci\codes\df"
         self.train_ratio = train_ratio
         self.min_com_size = min_com_size
         random.seed(seed)
