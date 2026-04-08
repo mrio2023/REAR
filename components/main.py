@@ -77,11 +77,11 @@ DATASET_CONFIGS = {
         "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 10.0,
-        "target_f1": 0.4,
+        "target_f1": 0.6,
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 70,  # 大图训练适当减少或保持
+        "epoch": 40,  # 大图训练适当减少或保持
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 2,  # 可能需更长路径
