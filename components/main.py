@@ -118,5 +118,5 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 if __name__ == "__main__":
     # 可调整训练的数据集列表
     # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
+    dataset_list = [ "elliptic","ibm_l_medium"]
     train_all_datasets(dataset_list, seed=2026)
