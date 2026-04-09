@@ -23,17 +23,14 @@ DATASET_CONFIGS = {
     },
     "elliptic": {
         "min_community_size": 2,
-        # 奖励层面
         "p_bias": 1.0,
         "r_bias": 1.0,
         "grad_norm": 1.0,
         "target_f1": 0.5,
         "stop_reward_scale": 2.0,
-        # 训练层面
         "gamma": 0.99,
         "seedNum": 40,
         "epoch": 60,
-        # 其他参数
         "f1_base_weight": 1.0,
         "lr": 1e-4,
         "maxLen": 12,
@@ -52,7 +49,7 @@ DATASET_CONFIGS = {
         "epoch": 70,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 13,  # 可能比small稍大
+        "maxLen": 13,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -70,7 +67,7 @@ DATASET_CONFIGS = {
         "lr": 1e-4,
         "maxLen": 12,
         "hidden_size": 128,
-        "device":  "cpu",
+        "device": "cpu",
     },
     "dgraph": {
         "min_community_size": 1,
@@ -81,10 +78,10 @@ DATASET_CONFIGS = {
         "stop_reward_scale": 2.0,
         "gamma": 0.99,
         "seedNum": 40,
-        "epoch": 40,  # 大图训练适当减少或保持
+        "epoch": 40,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 2,  # 可能需更长路径
+        "maxLen": 2,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -92,11 +89,10 @@ DATASET_CONFIGS = {
 
 
 def train_single_dataset(dfname: str, seed: int = 2026):
-    print(f"开始训练数据集：{dfname} (种子={seed})")
+    print(f"Training dataset: {dfname} (seed={seed})")
     set_seed(seed=seed)
-    print("种子是", seed)
     if dfname not in DATASET_CONFIGS:
-        print(f"数据集 {dfname} 无配置参数，终止训练")
+        print(f"Dataset {dfname} has no configuration. Aborting.")
         return None
     params = DATASET_CONFIGS[dfname]
     params["dfname"] = dfname
@@ -104,9 +100,8 @@ def train_single_dataset(dfname: str, seed: int = 2026):
     try:
         starter.run(dfname=dfname, seed=seed)
     except Exception as e:
-        print(f"\n❌ 数据集 {dfname} 运行失败：{str(e)}")
+        print(f"\nDataset {dfname} failed: {str(e)}")
         import traceback
-
         traceback.print_exc()
 
 
@@ -116,7 +111,6 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 
 if __name__ == "__main__":
-    # 可调整训练的数据集列表
-    # dataset_list = [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    dataset_list = [ "elliptic","ibm_l_medium"]
+    # Adjust the list of datasets to train as needed
+    dataset_list= [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
     train_all_datasets(dataset_list, seed=2026)

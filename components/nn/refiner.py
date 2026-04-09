@@ -14,11 +14,11 @@ class Refiner:
     def __init__(self, train_g: Graph, expander: Expander):
         self.expander = expander
         self.train_g = train_g
-        self.clf = None  # 分类器（统一接口）
-        self.scaler = None  # 标准化器
-        self.classifier_type = None  # 记录使用的分类器类型
+        self.clf = None
+        self.scaler = None
+        self.classifier_type = None
 
-    # ---------- 内部辅助方法（不变） ----------
+    # ---------- Helper methods ----------
     def _community_avg_embed(
         self, nodes: List[int], exclude_node: Optional[int] = None
     ) -> np.ndarray:
@@ -42,7 +42,7 @@ class Refiner:
             avg_emb = self._community_avg_embed(community_nodes, exclude_node=None)
         return np.concatenate([node_emb, avg_emb])
 
-    # ---------- 数据构建（不变） ----------
+    # ---------- Data construction ----------
     def build_training_data(
         self, num_samples: int = 1
     ) -> Tuple[np.ndarray, np.ndarray]:
@@ -61,11 +61,13 @@ class Refiner:
                 true_set = set(true_set)
                 pred_set = set(pred)
 
+                # Positive/negative samples from predicted community
                 for node in pred:
                     feat = self._node_feature(node, pred, exclude_node=False)
                     all_X.append(feat)
                     all_y.append(1 if node in true_set else 0)
 
+                # Negative samples from neighbours not in predicted community
                 neighbors = self.train_g.getNodesNeigh(pred)
                 unique_neighbors = set(neighbors) - pred_set
                 for node in unique_neighbors:
@@ -74,13 +76,13 @@ class Refiner:
                     all_y.append(1 if node in true_set else 0)
 
         if not all_X:
-            raise ValueError("没有生成任何训练样本，请检查数据或 expander 行为。")
+            raise ValueError("No training samples generated. Check data or expander behavior.")
 
         X = np.array(all_X)
         y = np.array(all_y)
         return X, y
 
-    # ---------- 训练（支持多种分类器） ----------
+    # ---------- Training (supports multiple classifiers) ----------
     def trainRefiner(
         self,
         num_samples: int = 1,
@@ -89,25 +91,25 @@ class Refiner:
         **xgb_params,
     ):
         """
-        训练 Refiner 分类器。
+        Train the Refiner classifier.
 
-        :param num_samples: 生成训练数据时的重复采样次数
-        :param classifier_type: 分类器类型，可选 'xgb', 'logistic', 'svm', 'rf'
-        :param classifier_params: 传递给分类器的参数字典（会覆盖默认参数）
-        :param xgb_params: 当 classifier_type='xgb' 时，可额外传入 XGBoost 参数（向后兼容）
+        Args:
+            num_samples: Number of repeated sampling passes to generate data.
+            classifier_type: Type of classifier ('xgb', 'logistic', 'svm', 'rf').
+            classifier_params: Parameter dict (overrides defaults).
+            xgb_params: Additional XGBoost parameters (backward compatibility).
         """
-        print("构建 Refiner 训练数据...")
+        print("Building Refiner training data...")
         X, y = self.build_training_data(num_samples=num_samples)
-        print(f"样本数: {len(X)}, 正样本比例: {np.mean(y):.3f}")
+        print(f"Samples: {len(X)}, Positive ratio: {np.mean(y):.3f}")
 
-        # 标准化（对逻辑回归、SVM 非常重要，对树模型也可选）
+        # Standardize features (important for linear models, optional for trees)
         self.scaler = StandardScaler()
         X_scaled = self.scaler.fit_transform(X)
 
-        # 根据类型初始化分类器
         self.classifier_type = classifier_type
-        print("refiner类型", self.classifier_type)
-        # 默认参数
+
+        # Default parameters
         if classifier_params is None:
             classifier_params = {}
 
@@ -120,11 +122,10 @@ class Refiner:
                 "eval_metric": "logloss",
                 "use_label_encoder": False,
             }
-            # 处理类别不平衡
+            # Handle class imbalance
             pos = np.sum(y)
             if 0 < pos < len(y):
                 default_params["scale_pos_weight"] = (len(y) - pos) / pos
-            # 合并用户参数（向后兼容 xgb_params）
             default_params.update(classifier_params)
             default_params.update(xgb_params)
             self.clf = xgb.XGBClassifier(**default_params)
@@ -133,18 +134,17 @@ class Refiner:
             default_params = {
                 "random_state": 42,
                 "max_iter": 1000,
-                "class_weight": "balanced",  # 自动处理不平衡
+                "class_weight": "balanced",
             }
             default_params.update(classifier_params)
             self.clf = LogisticRegression(**default_params)
 
         elif classifier_type == "svm":
-            # 使用概率输出，以便统一调用 predict_proba
             default_params = {
                 "probability": True,
                 "random_state": 42,
                 "class_weight": "balanced",
-                "max_iter": 1000,  # 避免不收敛
+                "max_iter": 1000,
             }
             default_params.update(classifier_params)
             self.clf = SVC(**default_params)
@@ -161,35 +161,27 @@ class Refiner:
 
         else:
             raise ValueError(
-                f"不支持的分类器类型: {classifier_type}，可选 'xgb', 'logistic', 'svm', 'rf'"
+                f"Unsupported classifier type: {classifier_type}. "
+                f"Choose from 'xgb', 'logistic', 'svm', 'rf'."
             )
 
-        # 训练
         self.clf.fit(X_scaled, y)
 
-        # 简单评估（训练集）
+        # Simple training accuracy evaluation
         if hasattr(self.clf, "predict_proba"):
-            y_pred_prob = self.clf.predict_proba(X_scaled)[:, 1]
-            y_pred = (y_pred_prob >= 0.5).astype(int)
+            y_pred = (self.clf.predict_proba(X_scaled)[:, 1] >= 0.5).astype(int)
         else:
-            # SVM 如果 probability=False 会没有 predict_proba，但我们已强制 True，这里只是兜底
             y_pred = self.clf.predict(X_scaled)
+        acc = np.mean(y_pred == y)
+        print(f"{classifier_type.upper()} training accuracy: {acc:.4f}")
+        print(f"Refiner ({classifier_type}) training completed.")
 
-        from sklearn.metrics import classification_report
-
-        print(f"\n【{classifier_type.upper()} 分类器 - 训练集报告】")
-        print(
-            classification_report(y, y_pred, target_names=["剔除/不加入", "保留/加入"])
-        )
-
-        print(f"Refiner ({classifier_type}) 训练完成")
-
-    # ---------- 精炼（统一使用 predict_proba） ----------
+    # ---------- Refinement (unified predict_proba interface) ----------
     def refine_community(
         self, comm_nodes: List[int], threshold: float = 0.5
     ) -> List[int]:
         if self.clf is None or self.scaler is None:
-            raise RuntimeError("Refiner 尚未训练，请先调用 trainRefiner() 方法。")
+            raise RuntimeError("Refiner not trained. Call trainRefiner() first.")
 
         if not comm_nodes:
             return []
@@ -201,7 +193,6 @@ class Refiner:
             node_emb = self.train_g.singleNodeEmbed(node)
             feat = np.concatenate([node_emb, avg_emb])
             X = self.scaler.transform([feat])
-            # 统一使用 predict_proba 获得正类概率
             prob = self.clf.predict_proba(X)[0, 1]
             if prob >= threshold:
                 keep_nodes.append(node)

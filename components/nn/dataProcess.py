@@ -6,12 +6,12 @@ import numpy as np
 class DataLoader:
     def __init__(self, dataset_name, train_ratio=0.8, min_com_size=3, seed=2026):
         """
-        返回全局图，以及训练/测试社区划分。
+        Load global graph and split communities into train/test sets.
 
-        :param dataset_name: 数据集名称
-        :param train_ratio: 训练社区比例（剩余为测试）
-        :param min_com_size: 最小社区大小
-        :param seed: 随机种子
+        :param dataset_name: Name of the dataset
+        :param train_ratio: Proportion of communities for training (rest for test)
+        :param min_com_size: Minimum community size to include
+        :param seed: Random seed
         """
         self.dataset = dataset_name
 
@@ -21,7 +21,7 @@ class DataLoader:
         self.min_com_size = min_com_size
         random.seed(seed)
 
-        # 文件路径
+        # File paths
         self.ungraph_file = os.path.join(
             self.root, dataset_name, f"{dataset_name}-1.90.ungraph.txt"
         )
@@ -32,17 +32,17 @@ class DataLoader:
             self.root, dataset_name, f"{dataset_name}-1.90.nodefeat.txt"
         )
 
-        # 加载全局数据
-        self.graph = None  # 邻接表、节点数等
-        self.comms = None  # 社区列表
-        self.nodefeats = None  # 特征字典
+        # Load global data
+        self.graph = None
+        self.comms = None
+        self.nodefeats = None
         self._load_data()
 
-        # 划分社区
+        # Split communities
         self._split_comms()
 
     def _load_data(self, outlier_threshold=2):
-        """读取边、社区、特征，并自动剔除大小异常的社区"""
+        """Read edges, communities, features, and filter out outlier-sized communities."""
         edges = []
         with open(self.ungraph_file, "r") as f:
             for line in f:
@@ -56,21 +56,21 @@ class DataLoader:
                 if len(nodes) >= self.min_com_size:
                     comms.append(nodes)
 
-        # 统计社区大小
+        # Filter communities by size (remove outliers)
         sizes = [len(c) for c in comms]
         if sizes:
             mean_size = np.mean(sizes)
             std_size = np.std(sizes)
             lower_bound = self.min_com_size
             upper_bound = mean_size + outlier_threshold * std_size
-            # 过滤异常大小的社区
             filtered_comms = [c for c in comms if lower_bound <= len(c) <= upper_bound]
             print(
-                f"原始社区数: {len(comms)}，过滤后: {len(filtered_comms)}，剔除 {len(comms)-len(filtered_comms)} 个异常大小社区（下限={lower_bound}, 上限={upper_bound:.1f})"
+                f"Original communities: {len(comms)}, after filtering: {len(filtered_comms)} "
+                f"(removed {len(comms)-len(filtered_comms)} outliers, size range [{lower_bound}, {upper_bound:.1f}])"
             )
             comms = filtered_comms
         else:
-            print("警告：没有符合条件的社区！")
+            print("Warning: No communities satisfying minimum size condition.")
 
         nodefeats = {}
         if os.path.exists(self.feat_file):
@@ -83,7 +83,7 @@ class DataLoader:
                     feats = list(map(float, parts[1:]))
                     nodefeats[node] = feats
 
-        # 构建邻接表
+        # Build adjacency list
         adj = {}
         for u, v in edges:
             adj.setdefault(u, set()).add(v)
@@ -93,11 +93,11 @@ class DataLoader:
         self.comms = comms
         self.nodefeats = nodefeats
         print(
-            f"加载完成：节点数 {self.graph['n']}，边数 {len(edges)}，社区数 {len(comms)}，特征节点数 {len(nodefeats)}"
+            f"Loaded: nodes={self.graph['n']}, edges={len(edges)}, communities={len(comms)}, nodes_with_features={len(nodefeats)}"
         )
 
     def _split_comms(self):
-        """随机划分社区为训练集和测试集"""
+        """Randomly split communities into training and test sets."""
         indices = list(range(len(self.comms)))
         random.shuffle(indices)
         split = int(len(indices) * self.train_ratio)

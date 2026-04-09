@@ -8,7 +8,7 @@ from typing import Dict, List, Tuple, Set, Any
 
 
 def set_seed(seed: int):
-    """固定所有随机种子"""
+    """Fix all random seeds for reproducibility."""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -17,8 +17,7 @@ def set_seed(seed: int):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
     os.environ["PYTHONHASHSEED"] = str(seed)
-    print(f"✅ 所有随机种子已固定为：{seed}")
-
+    print(f"All random seeds fixed to: {seed}")
 
 
 def pruning(
@@ -27,30 +26,21 @@ def pruning(
         List[np.ndarray], List[torch.Tensor], np.ndarray, torch.Tensor
     ],
     neigh_nodes: List[str],
-    top_k_max: int = 50,  # 最大保留50个（与注释一致）
-    top_p_ratio: float = 0.1,  # 最大保留10%
-    min_neigh_threshold: int = 30,  # 邻居数≤30时不剪枝（与注释一致）
-    debug: bool = False,  # 新增调试开关
+    top_k_max: int = 50,
+    top_p_ratio: float = 0.1,
+    min_neigh_threshold: int = 30,
+    debug: bool = False,
 ) -> List[str]:
     """
-    【静态函数】基于余弦相似度剪枝：
-    1. 邻居数 ≤ min_neigh_threshold → 不剪枝（防止过少节点）
-    2. 邻居数 > min_neigh_threshold → 自动选择 top_p_ratio 或 top_k_max 中更小的数量保留
-    :param community_pooled_embed: 社区池化向量（1维/2维均可）
-    :param neigh_node_embed_list: 邻居节点嵌入（列表/数组，numpy/torch均可）
-    :param neigh_nodes: 邻居节点ID列表（与嵌入一一对应）
-    :param top_k_max: 硬上限（最多保留多少个）
-    :param top_p_ratio: 比例上限（最多保留百分之多少）
-    :param min_neigh_threshold: 不剪枝的最小阈值（邻居数≤此值时不剪枝）
-    :param debug: 是否打印调试信息
-    :return: 剪枝后的邻居节点ID列表
+    Prune neighbors based on cosine similarity:
+    1. If number of neighbors <= min_neigh_threshold -> no pruning.
+    2. Otherwise keep min(top_p_ratio, top_k_max) neighbors with highest similarity.
     """
-
     if isinstance(community_pooled_embed, torch.Tensor):
         pooled_embed = community_pooled_embed.detach().cpu().numpy()
     else:
         pooled_embed = community_pooled_embed
-    pooled_embed = pooled_embed.reshape(1, -1)  # (1, embed_dim)
+    pooled_embed = pooled_embed.reshape(1, -1)
 
     if isinstance(neigh_node_embed_list, list):
         if isinstance(neigh_node_embed_list[0], torch.Tensor):
@@ -68,21 +58,17 @@ def pruning(
     num_neigh = len(neigh_nodes)
     if num_neigh == 0:
         if debug:
-            print("[Pruning] 无邻居节点，返回空列表")
+            print("[Pruning] No neighbors, returning empty list")
         return []
-
 
     if num_neigh <= min_neigh_threshold:
         if debug:
-            print(f"[Pruning] 邻居数={num_neigh} ≤ {min_neigh_threshold}，不剪枝")
+            print(f"[Pruning] Neighbors={num_neigh} <= {min_neigh_threshold}, no pruning")
         return neigh_nodes
 
-   
-    keep_num_by_p = max(1, int(num_neigh * top_p_ratio)) 
-    keep_num = min(keep_num_by_p, top_k_max)  
-    keep_num = max(
-        min_neigh_threshold, keep_num
-    )  
+    keep_num_by_p = max(1, int(num_neigh * top_p_ratio))
+    keep_num = min(keep_num_by_p, top_k_max)
+    keep_num = max(min_neigh_threshold, keep_num)
     keep_num = min(keep_num, num_neigh)
 
     sim_scores = cosine_similarity(pooled_embed, neigh_embeds)[0]
@@ -90,48 +76,47 @@ def pruning(
     top_indices = sorted_indices[:keep_num]
     pruned_neigh_nodes = [neigh_nodes[idx] for idx in top_indices]
 
-   
     return pruned_neigh_nodes
 
 
 def eval_scores(
     pred_comm: Union[List, Set], true_comm: Union[List, Set]
 ) -> Tuple[float, float, float]:
-    
+    """Compute Precision, Recall, F1 between predicted and true communities."""
     pred_set = set(pred_comm) if isinstance(pred_comm, list) else pred_comm
     true_set = set(true_comm) if isinstance(true_comm, list) else true_comm
 
     intersect = true_set & pred_set
     p = len(intersect) / len(pred_set) if pred_set else 0.0
     r = len(intersect) / len(true_set) if true_set else 0.0
-    f1 = 2 * p * r / (p + r + 1e-9)  # 加极小值防止除零
+    f1 = 2 * p * r / (p + r + 1e-9)
     return round(p, 4), round(r, 4), round(f1, 4)
 
 
 def calculate_prfj(com1: List, com2: List) -> Tuple[float, float, float, float]:
-    """
-    计算单个社区对的 Precision, Recall, F1, Jaccard
-    """
+    """Compute Precision, Recall, F1, and Jaccard for a single community pair."""
     p, r, f1 = eval_scores(com1, com2)
-    
+
     set1, set2 = set(com1), set(com2)
     intersection = len(set1 & set2)
     union = len(set1 | set2)
     jaccard = intersection / union if union > 0 else 0.0
-    
+
     return p, r, f1, jaccard
 
+
 def safe_mean(values: List[float]) -> float:
-    """安全的平均值计算"""
+    """Safely compute the mean of a list, returning 0.0 if empty."""
     return round(np.mean(values) if values else 0.0, 4)
+
 
 def compute_single_metrics(pred_com: List, true_com: List, metrics_dict: Dict[str, List]) -> None:
     """
-    计算单组结果并填入字典
+    Compute metrics for a single prediction and append to the dictionary.
     Args:
-        pred_com: 预测社区列表
-        true_com: 真实社区列表
-        metrics_dict: 用于存储的字典 (会在原地修改)
+        pred_com: Predicted community list
+        true_com: Ground truth community list
+        metrics_dict: Dictionary with keys 'precision', 'recall', 'f1', 'jaccard'
     """
     p, r, f1, j = calculate_prfj(pred_com, true_com)
     metrics_dict["precision"].append(p)
@@ -139,9 +124,10 @@ def compute_single_metrics(pred_com: List, true_com: List, metrics_dict: Dict[st
     metrics_dict["f1"].append(f1)
     metrics_dict["jaccard"].append(j)
 
+
 def aggregate_avg_metrics(metrics_before: Dict[str, List], metrics_after: Dict[str, List]) -> Dict[str, float]:
     """
-    聚合扩展前后的指标，生成最终报告字典
+    Aggregate average metrics before and after refinement into a single dictionary.
     """
     return {
         "before_avg_precision": safe_mean(metrics_before["precision"]),
