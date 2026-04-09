@@ -5,5 +5,6 @@
 *.rar
 # 忽略整个 df 目录（如果该目录下都是大文件，无需版本控制）
 df/
+df_full/
 logs/
 kernel_meta/

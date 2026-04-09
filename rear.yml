@@ -1,0 +1,17 @@
+name: rear
+channels:
+  - conda-forge
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.11
+  - pip
+  - pandas
+  - scipy
+  - scikit-learn
+  - networkx
+  - xgboost
+  - tqdm
+  - pip:
+      - numpy==1.26.4
+      - torch==2.9.0
