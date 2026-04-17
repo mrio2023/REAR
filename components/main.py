@@ -33,7 +33,7 @@ DATASET_CONFIGS = {
         "epoch": 60,
         "f1_base_weight": 1.0,
         "lr": 1e-4,
-        "maxLen": 12,
+        "maxLen": 7,
         "hidden_size": 128,
         "device": "cuda" if torch.cuda.is_available() else "cpu",
     },
@@ -111,6 +111,7 @@ def train_all_datasets(datasets: list, seed: int = 2026):
 
 
 if __name__ == "__main__":
-    # Adjust the list of datasets to train as needed
-    dataset_list= [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
-    train_all_datasets(dataset_list, seed=2026)
+
+    # dataset_list= [ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
+    dataset_list=[ "elliptic","dgraph","ibm_l_medium","ibm_h_medium","ibm_h_small"]
+    train_all_datasets(dataset_list, seed=1134)

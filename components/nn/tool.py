@@ -7,6 +7,53 @@ import os
 from typing import Dict, List, Tuple, Set, Any
 
 
+def compute_metrics(
+    true_coms: List[Tuple[str, List]], pred_coms: Dict[str, Set]
+) -> Dict[str, float]:
+    """
+    Compute average precision, recall, F1, and Jaccard for a set of communities.
+
+    Args:
+        true_coms: List of (community_tag, list_of_nodes) for ground truth.
+        pred_coms: Dictionary mapping community_tag -> set of predicted nodes.
+
+    Returns:
+        Dictionary with keys 'precision', 'recall', 'f1', 'jaccard' containing averages.
+    """
+    METRIC_KEYS = ["precision", "recall", "f1", "jaccard"]
+    metrics = {key: [] for key in METRIC_KEYS}
+    for tag, true_nodes in true_coms:
+        pred_nodes = list(pred_coms.get(tag, set()))
+        compute_single_metrics(pred_nodes, true_nodes, metrics)
+    return {key: safe_mean(metrics[key]) for key in METRIC_KEYS}
+
+
+def print_metrics(metrics: Dict[str, float], title: str = "Evaluation Metrics") -> None:
+    """Print a formatted metrics table."""
+    print("\n" + "=" * 80)
+    print(title)
+    print("=" * 80)
+    print(
+        f"Precision: {metrics['precision']:.4f} | Recall: {metrics['recall']:.4f} | "
+        f"F1: {metrics['f1']:.4f} | Jaccard: {metrics['jaccard']:.4f}"
+    )
+
+
+def print_metrics_comparison(orig: Dict[str, float], refined: Dict[str, float]) -> None:
+
+    METRIC_KEYS = ["precision", "recall", "f1", "jaccard"]
+    """Print side-by-side comparison of original vs refined metrics."""
+    print("\n" + "=" * 80)
+    print("Metric Changes (Original → Refined)")
+    print("=" * 80)
+    for key in METRIC_KEYS:
+        diff = refined[key] - orig[key]
+        print(
+            f"{key.capitalize():9}: {orig[key]:.4f} → {refined[key]:.4f} ({diff:+.4f})"
+        )
+    print("=" * 80)
+
+
 def set_seed(seed: int):
     """Fix all random seeds for reproducibility."""
     random.seed(seed)
@@ -63,7 +110,9 @@ def pruning(
 
     if num_neigh <= min_neigh_threshold:
         if debug:
-            print(f"[Pruning] Neighbors={num_neigh} <= {min_neigh_threshold}, no pruning")
+            print(
+                f"[Pruning] Neighbors={num_neigh} <= {min_neigh_threshold}, no pruning"
+            )
         return neigh_nodes
 
     keep_num_by_p = max(1, int(num_neigh * top_p_ratio))
@@ -110,7 +159,9 @@ def safe_mean(values: List[float]) -> float:
     return round(np.mean(values) if values else 0.0, 4)
 
 
-def compute_single_metrics(pred_com: List, true_com: List, metrics_dict: Dict[str, List]) -> None:
+def compute_single_metrics(
+    pred_com: List, true_com: List, metrics_dict: Dict[str, List]
+) -> None:
     """
     Compute metrics for a single prediction and append to the dictionary.
     Args:
@@ -125,7 +176,9 @@ def compute_single_metrics(pred_com: List, true_com: List, metrics_dict: Dict[st
     metrics_dict["jaccard"].append(j)
 
 
-def aggregate_avg_metrics(metrics_before: Dict[str, List], metrics_after: Dict[str, List]) -> Dict[str, float]:
+def aggregate_avg_metrics(
+    metrics_before: Dict[str, List], metrics_after: Dict[str, List]
+) -> Dict[str, float]:
     """
     Aggregate average metrics before and after refinement into a single dictionary.
     """
