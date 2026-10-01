@@ -8,5 +8,9 @@
 # 忽略整个 df 目录（如果该目录下都是大文件，无需版本控制）
 df/
 df_full/
-logs/
 kernel_meta/
+
+# 忽略所有以 logs 开头的文件/目录
+logs/
+logs_*/
+logs*
