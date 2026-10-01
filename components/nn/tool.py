@@ -83,7 +83,7 @@ def pruning(
     1. If number of neighbors <= min_neigh_threshold -> no pruning.
     2. Otherwise keep min(top_p_ratio, top_k_max) neighbors with highest similarity.
     """
-    return neigh_nodes
+   
     if isinstance(community_pooled_embed, torch.Tensor):
         pooled_embed = community_pooled_embed.detach().cpu().numpy()
     else:
